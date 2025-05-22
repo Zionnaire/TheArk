@@ -116,24 +116,56 @@ const getAllPosts = async (req, res) => {
 const editPost = async (req, res) => {
   try {
     const { content } = req.body;
-    const loggedInUserId = req.user.id;
     const { postId } = req.params;
 
-    const post = await Post.findById(postId);
-    if (!post) return res.status(404).json({ message: "Post not found" });
+    // console.log("📥 HIT EDIT POST ROUTE");
+    // console.log("📌 Received Post ID:", postId);
+    // console.log("🙋🏽 Logged-in User:", req.user);
 
-    if (post.user.toString() !== loggedInUserId.toString()) {
+    // Check if user is authenticated
+    if (!req.user || !req.user.id) {
+      // console.log(" Unauthorized: Missing user");
+      return res.status(401).json({ message: "Unauthorized: Missing user" });
+    }
+
+    const loggedInUserId = req.user.id;
+
+    // Validate Post ID format
+    if (!mongoose.Types.ObjectId.isValid(postId)) {
+      // console.log(" Invalid Post ID format");
+      return res.status(400).json({ message: "Invalid Post ID" });
+    }
+
+    // Fetch post from DB
+    const post = await Post.findById(postId);
+    // console.log("🔍 Found Post:", post);
+
+    if (!post) {
+      // console.log(" Post not found in DB");
+      return res.status(404).json({ message: "Post not found" });
+    }
+
+    const postOwnerId = post.user?._id?.toString?.() || post.user?.toString?.();
+
+    // Authorization check
+    if (postOwnerId !== loggedInUserId.toString()) {
+      // console.log(" Unauthorized: User doesn't own this post");
       return res.status(403).json({ message: "Unauthorized to edit this post" });
     }
 
+    // Update post content
     post.content = content;
     await post.save();
 
-    res.status(200).json({ message: "Post updated successfully", post });
+    // console.log(" Post updated successfully:", post._id);
+    return res.status(200).json({ message: "Post updated successfully", post });
+
   } catch (error) {
-    res.status(500).json({ message: error.message });
+    console.error(" Edit post error:", error);
+    return res.status(500).json({ message: error.message || "Server error" });
   }
 };
+
 // Create a Comment
   const createComment = async (req, res) => {
     try {
@@ -376,10 +408,10 @@ const getPostById = async (req, res) => {
 }
 // Get User Posts
 const getUserPosts = async (req, res) => {
- const { userId } = req.params;
+  const { userId } = req.params;
 
-  if (!userId) {
-    return res.status(400).json({ message: "Missing userId in params." });
+  if (!userId || userId.trim() === "") {
+    return res.status(400).json({ message: "Missing or invalid userId in request parameters." });
   }
 
   try {
@@ -387,12 +419,13 @@ const getUserPosts = async (req, res) => {
       .populate("user", "firstName lastName userName bio userImage")
       .sort({ createdAt: -1 });
 
-res.status(200).json({ posts });
+    return res.status(200).json({ posts });
   } catch (error) {
-    console.error("❌ Failed to fetch user posts:", error.message);
-    res.status(500).json({ message: "Server error while fetching posts." });
+    console.error("❌ Failed to fetch user posts:", error);
+    return res.status(500).json({ message: "Server error while fetching user posts." });
   }
 };
+
 
 const filterPosts = async (req, res) => {
     try {

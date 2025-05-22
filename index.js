@@ -48,7 +48,7 @@ const resendVerificationRouter = require("./Routes/resendVerification");
 const verifyRegisterRouter = require("./Routes/verifyRegister");
 const chatGroupRouter = require("./Routes/chatGroup");
 const unitRouter = require('./Routes/unit')
-const commentHandlers = require("./Controllers/commentController")(global.io);
+// const commentHandlers = require("./Controllers/commentController")(global.io);
 const commentRouter = require("./Routes/comment");
 const refreshRouter = require("./Routes/refreshToken");
 
@@ -93,6 +93,7 @@ app.use("/api/v1/resendVerification", resendVerificationRouter);
 app.use("/api/v1/verifyUser", verifyRegisterRouter);
 app.use("/api/v1/verifyChurch", verifyRegisterRouter);
 app.use("/api/v1/chatGroups", chatGroupRouter);
+app.use("/api/v1/chats", chatRouter)
 app.use("/api/v1/units", unitRouter);
 app.use("/api/v1/comments", commentRouter);
 app.use("/api/v1/refresh-token", refreshRouter);

@@ -10,7 +10,7 @@ postRouter.post("/", verifyToken, postIo.createPost);
 postRouter.get("/user", verifyToken, postIo.getPosts);
 postRouter.get("/", postIo.getAllPosts);
 postRouter.get("/:postId", postIo.getPostById);
-postRouter.put("/:postId", verifyToken, postIo.editPost);
+postRouter.put('/edit/:postId',verifyToken, postIo.editPost);
 postRouter.delete("/:postId", verifyToken, postIo.deletePost);
 postRouter.post("/:postId/like", verifyToken, postIo.likePost);
 postRouter.post("/:postId/unlike", verifyToken, postIo.unlikePost);
