@@ -20,7 +20,7 @@ const upload = require("../Middlewares/upload");
 const {verifyToken} = require("../Middlewares/jwt");
 
 // Get all users
-userRouter.get("/users", getAllUsers);
+userRouter.get("/users", verifyToken, getAllUsers);
 
 // Get a user 
 userRouter.get("/:userId", getAUserById)

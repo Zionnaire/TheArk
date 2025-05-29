@@ -74,3 +74,20 @@
 {"level":"error","message":"user.posts.save is not a function","timestamp":"2025-05-20T03:26:24.915Z"}
 {"level":"error","message":"User validation failed: password: Password must have at least one uppercase letter, one lowercase letter, one number, and one special character","timestamp":"2025-05-20T03:32:06.729Z"}
 {"level":"error","message":"Error uploading image to Cloudinary","timestamp":"2025-05-20T10:29:50.174Z"}
+{"level":"error","message":"jwtDecode is not defined","timestamp":"2025-05-25T19:00:57.023Z"}
+{"level":"error","message":"Cannot populate path `privateChats.lastMessage` because it is not in your schema. Set the `strictPopulate` option to false to override.","timestamp":"2025-05-27T23:44:45.694Z"}
+{"level":"error","message":"Cannot populate path `privateChats.lastMessage` because it is not in your schema. Set the `strictPopulate` option to false to override.","timestamp":"2025-05-27T23:45:14.642Z"}
+{"level":"error","message":"Cannot populate path `privateChats.lastMessage` because it is not in your schema. Set the `strictPopulate` option to false to override.","timestamp":"2025-05-27T23:47:22.991Z"}
+{"level":"error","message":"Cannot populate path `privateChats.lastMessage` because it is not in your schema. Set the `strictPopulate` option to false to override.","timestamp":"2025-05-27T23:50:27.719Z"}
+{"level":"error","message":"Cannot populate path `privateChats.lastMessage` because it is not in your schema. Set the `strictPopulate` option to false to override.","timestamp":"2025-05-27T23:54:09.947Z"}
+{"level":"error","message":"Cannot populate path `privateChats.lastMessage` because it is not in your schema. Set the `strictPopulate` option to false to override.","timestamp":"2025-05-28T00:02:10.730Z"}
+{"level":"error","message":"Cannot populate path `privateChats.lastMessage` because it is not in your schema. Set the `strictPopulate` option to false to override.","timestamp":"2025-05-28T00:03:49.647Z"}
+{"level":"error","message":"Cannot populate path `privateChats.lastMessage` because it is not in your schema. Set the `strictPopulate` option to false to override.","timestamp":"2025-05-28T00:05:17.588Z"}
+{"level":"error","message":"Cannot populate path `privateChats.lastMessage` because it is not in your schema. Set the `strictPopulate` option to false to override.","timestamp":"2025-05-28T00:07:23.357Z"}
+{"level":"error","message":"Cannot populate path `privateChats.lastMessage` because it is not in your schema. Set the `strictPopulate` option to false to override.","timestamp":"2025-05-28T00:11:56.335Z"}
+{"level":"error","message":"Cannot populate path `privateChats.lastMessage` because it is not in your schema. Set the `strictPopulate` option to false to override.","timestamp":"2025-05-28T00:15:03.176Z"}
+{"level":"error","message":"Cannot populate path `privateChats.lastMessage` because it is not in your schema. Set the `strictPopulate` option to false to override.","timestamp":"2025-05-28T00:18:00.205Z"}
+{"level":"error","message":"Cannot populate path `privateChats.lastMessage` because it is not in your schema. Set the `strictPopulate` option to false to override.","timestamp":"2025-05-28T00:19:22.403Z"}
+{"level":"error","message":"Cannot populate path `privateChats.lastMessage` because it is not in your schema. Set the `strictPopulate` option to false to override.","timestamp":"2025-05-28T00:23:38.759Z"}
+{"level":"error","message":"Post validation failed: content: Path `content` is required.","timestamp":"2025-05-29T20:42:08.549Z"}
+{"level":"error","message":"Post validation failed: content: Path `content` is required.","timestamp":"2025-05-29T20:42:34.344Z"}

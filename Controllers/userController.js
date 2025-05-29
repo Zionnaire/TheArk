@@ -1,16 +1,16 @@
+
 const User = require("../Models/user");
 const Church = require("../Models/churchesAdmin")
 const bcrypt = require("bcryptjs");
 const { signJwt, signRefreshToken } = require("../Middlewares/jwt");
-const Role = require("../Models/role");
 const logger = require("../Middlewares/logger");
 const { uploadToCloudinary } = require("../Middlewares/cloudinaryUpload");
+
 
 // Register user
 const crypto = require("crypto");
 const nodemailer = require("nodemailer");
-const user = require("../Models/user");
-const role = require("../Models/role");
+
 
 const generateVerificationCode = () =>
   Math.floor(100000 + Math.random() * 900000).toString();
@@ -117,7 +117,24 @@ const login = async (req, res) => {
     const { email, password } = req.body;
 
     // Check if user exists
-    let user = await User.findOne({ email });
+    let user = await User.findOne({ email })
+      .populate({
+        path: "unitChats",
+        populate: { path: "lastMessage", select: "content sender createdAt" },
+      })
+      .populate({
+        path: "departmentChats",
+        populate: { path: "lastMessage", select: "content sender createdAt" },
+      })
+      .populate({
+        path: "privateChats",
+        populate: { path: "lastMessage", select: "content sender createdAt" },
+      })
+      .populate({
+        path: "generalChats",
+        populate: { path: "lastMessage", select: "content sender createdAt" },
+      });
+
     if (!user) {
       return res.status(400).json({ message: "Invalid credentials" });
     }
@@ -128,13 +145,12 @@ const login = async (req, res) => {
       return res.status(400).json({ message: "Invalid credentials" });
     }
 
-    // Create JWT token
-    // Use JWT from middleware
-
-   
-    const token = signJwt({ user, role: user.role, name: user.firstName });
+    // Create JWT tokens
+    const token = signJwt({ user, role: user.role, name: user.firstName, id: user.id });
     const refreshToken = signRefreshToken({ id: user._id });
+    //  const decoded = jwtDecode<TokenPayload>(token);
 
+    // Respond with user data and tokens
     res.json({
       token,
       refreshToken,
@@ -149,19 +165,39 @@ const login = async (req, res) => {
         isActive: user.isActive,
         isEmailVerified: user.isEmailVerified,
         userImage: user.userImage,
-        chats: user.chats,
+        bio: user.bio,
         posts: user.posts,
         socialMedia: user.socialMedia,
-        bio: user.bio
+
+        unitChats: user.unitChats?.map(chat => ({
+          id: chat._id,
+          lastMessage: chat.lastMessage || null,
+        })),
+
+        departmentChats: user.departmentChats?.map(chat => ({
+          id: chat._id,
+          lastMessage: chat.lastMessage || null,
+        })),
+
+        privateChats: user.privateChats?.map(chat => ({
+          id: chat._id,
+          lastMessage: chat.lastMessage || null,
+        })),
+
+        generalChats: user.generalChats?.map(chat => ({
+          id: chat._id,
+          lastMessage: chat.lastMessage || null,
+        })),
       },
     });
+
   } catch (err) {
     console.error(err.message);
-    logger.error(err.message);
-    console.log(err.message);
+    logger?.error?.(err.message); // Optional: your custom logger
     res.status(500).send("Server error");
   }
 };
+
 
 const logoutUser = async (req, res) => {
     try {
@@ -303,7 +339,7 @@ const updateProfile = async (req, res) => {
 // Get a user by ID (from authenticated user or params)
 const getAUserById = async (req, res) => {
   try {
-    const { userId } = req.params; // 🔥 get ID from route params
+    const { userId } = req.params; //  get ID from route params
 
     const user = await User.findById(userId)
       .select("-password") // exclude sensitive info
@@ -325,14 +361,40 @@ const getAUserById = async (req, res) => {
 // Get all users
 const getAllUsers = async (req, res) => {
   try {
-    const users = await User.find();
-    res.json(users);
+    const currentUserId = req.user?.id;
+    // console.log(currentUserId);
+    
+
+    const users = await User.find(
+      { _id: { $ne: currentUserId } },
+      'userName firstName lastName phoneNumber email userImage'
+    ).lean();
+
+    // console.log(users);
+    
+
+    // Map _id to id for frontend friendliness
+    const formattedUsers = users.map(user => ({
+      ...user,
+      id: user._id,
+  userName: user.userName,
+  firstName: user.firstName,
+  lastName: user.lastName,
+  userImage: user.userImage,
+  phoneNumber: user.phoneNumber
+    }));
+
+    // console.log(formattedUsers);
+    
+
+    res.json(formattedUsers);
   } catch (err) {
-    console.error(err.message);
+    console.error("getAllUsers error:", err.message);
     res.status(500).send("Server error");
     logger.error(err);
   }
 };
+
 
 // Get all user chats
 const getAllUserChats = async (req, res) => {
@@ -340,10 +402,10 @@ const getAllUserChats = async (req, res) => {
     const userId = req.user.id;
 
     const user = await User.findById(userId).populate("privateChats").populate("unitChats").populate("departmentChats").populate("generalChats");
-     console.log("User from token:", req.user);
+    //  console.log("User from token:", req.user);
 
     if (!user) {
-      console.error(`[getAllUserChats] User not found: ${userId}`);
+      // console.error(`[getAllUserChats] User not found: ${userId}`);
       return res.status(404).json({ success: false, message: "User not found" });
     }
 

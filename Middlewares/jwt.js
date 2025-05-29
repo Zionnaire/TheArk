@@ -35,25 +35,22 @@ const signJwt = ({ user = null, church = null, role = "user" || "churchAdmin", n
 
 const verifyToken = async (req, res, next) => {
   try {
-    const authorizationHeader = req.headers.authorization;
-
-    if (
-      !authorizationHeader ||
-      !authorizationHeader.toLowerCase().startsWith("bearer ")
-    ) {
+    const authHeader = req.headers.authorization;
+    if (!authHeader || !authHeader.toLowerCase().startsWith("bearer ")) {
       return res.status(400).json({ message: "Invalid authorization header" });
     }
 
-    const token = authorizationHeader.split(" ")[1];
+    const token = authHeader.split(" ")[1];
     const decoded = jwt.verify(token, process.env.JWT_SECRET);
-    // console.log("Decoded JWT:", decoded);
 
-    if (!decoded || !decoded.id || !decoded.role || !decoded.name) {
+    const { id, role } = decoded;
+    if (!id || !role) {
       return res.status(401).json({ message: "Invalid token structure" });
     }
 
-    const { id, role, name } = decoded;
+    const resolveName = (obj) => obj.churchName || obj.name || obj.firstName || "User";
 
+    // For churchAdmin
     if (role === "churchAdmin") {
       const church = await Church.findById(decoded.churchId || id);
       if (!church) {
@@ -62,53 +59,89 @@ const verifyToken = async (req, res, next) => {
 
       req.user = {
         id: church._id,
+        churchId: church._id,
         role: "churchAdmin",
         isChurchAdmin: true,
-        churchId: church._id,
-        name: church.churchName || church.name,
+        name: resolveName(church),
       };
 
       return next();
     }
 
-    // Default to normal user logic
-    const user = await User.findById(decoded.userId || id);
+    // For normal user
+ const user = await User.findById(decoded.userId || id)
+  .populate('unitChats', 'unitName')
+  .populate('departmentChats', 'departmentName')
+  .populate('generalChats', 'name')
+  .populate('privateChats', 'sender receiver'); // Or whatever fields you need
+  
+
+
     if (!user) {
       return res.status(404).json({ message: "User not found" });
     }
 
-    req.user = {
-      id: user._id,
-      role: role || "member",
-      isAdmin: false,
-      isChurchAdmin: false,
-      name: user[name] || user.firstName,
-    
-    };
 
-    const isAdmin = await Admin.findOne({ user: user._id });
-    if (isAdmin) {
+      // Check if user is also an Admin or ChurchAdmin
+    const [admin, churchAdmin] = await Promise.all([
+      Admin.findOne({ user: user._id }).lean(),
+      Church.findOne({ churchEmail: user.email }).lean(),
+    ]);
+
+    const firstUnitChat = Array.isArray(user.unitChats) && user.unitChats.length > 0
+      ? user.unitChats[0]
+      : null;
+
+    const firstDepartmentChat = Array.isArray(user.departmentChats) && user.departmentChats.length > 0
+      ? user.departmentChats[0]
+      : null;
+
+req.user = {
+  id: user._id,
+  role: role || "member",
+  isAdmin: !!admin,
+  isChurchAdmin: !!churchAdmin,
+  name: resolveName(user),
+  churchId: churchAdmin?._id || null,
+
+  unitChats: user.unitChats.map(chat => ({
+    id: chat._id,
+    name: chat.unitName || "Unnamed Unit",
+  })),
+
+  departmentChats: user.departmentChats.map(chat => ({
+    id: chat._id,
+    name: chat.departmentName || "Unnamed Dept",
+  })),
+
+  generalChatIds: user.generalChats.map(chat => chat._id),
+  privateChatIds: user.privateChats.map(chat => chat._id),
+};
+
+  
+
+    if (admin) {
       req.user.isAdmin = true;
     }
 
-    const churchAdmin = await Church.findOne({ churchEmail: user.email });
     if (churchAdmin) {
       req.user.isChurchAdmin = true;
       req.user.churchId = churchAdmin._id;
-      req.user.role = "churchAdmin";
-      req.user.name = churchAdmin.churchName || churchAdmin.name;
+      req.user.role = "churchAdmin"; // Update role context
+      req.user.name = resolveName(churchAdmin);
     }
 
-    return next();
+    next();
 
   } catch (error) {
     console.error("Error verifying token:", error);
-    if (error.name === "TokenExpiredError") {
-      return res.status(401).json({ message: "Token has expired" });
-    }
-    return res.status(401).json({ message: "Invalid token" });
+    return res.status(401).json({
+      message: error.name === "TokenExpiredError" ? "Token has expired" : "Invalid token",
+    });
   }
 };
+
+
 
 const signRefreshToken = ({ id }) => {
   return jwt.sign({ id }, process.env.REFRESH_TOKEN_SECRET, {
