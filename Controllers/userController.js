@@ -218,7 +218,7 @@ const logoutUser = async (req, res) => {
 // Get user profile
 const getProfile = async (req, res) => {
   try {
-    console.log("User from token:", req.user);
+    // console.log("User from token:", req.user);
     // Ensure the user is authenticated
     if (!req.user || !req.user.id) {
       return res

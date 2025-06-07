@@ -21,12 +21,19 @@ const chatIo = (io) => {
   // Helper: Validate ObjectId
   const isValidObjectId = (id) => mongoose.Types.ObjectId.isValid(id);
 
+ 
+// Helper to normalize room IDs (make sure to keep this in your utils or here)
+function getRoomId(senderId, receiverId) {
+  return [senderId.toString(), receiverId.toString()].sort().join('_');
+}
+
   //Send a message (All chats)
-  // 
 const sendMessage = async (req, res) => {
   try {
-    const { chatType, recipientId: chatIdOrRecipientId } = req.params; // 🔥 FIXED: match route param
-    const { message = "", reactions = "[]" } = req.body;
+  
+
+    const { chatType, recipientId: chatIdOrRecipientId } = req.params;
+    const { message = "", reactions = "", tempId } = req.body;
     const senderId = req.user.id;
     const senderName = req.user.firstName || req.user.userName || 'Someone';
 
@@ -48,7 +55,8 @@ const sendMessage = async (req, res) => {
         } else {
           return res.status(400).json({ message: "Invalid reactions format." });
         }
-      } catch {
+      } catch (jsonError) {
+        console.error("JSON parsing error for reactions:", jsonError);
         return res.status(400).json({ message: "Invalid reactions format." });
       }
     }
@@ -65,8 +73,8 @@ const sendMessage = async (req, res) => {
       if (!file.mimetype.startsWith("image/") && !file.mimetype.startsWith("video/")) {
         return res.status(400).json({ message: `Unsupported attachment type: ${file.mimetype}` });
       }
-
       try {
+        console.log("File upload structure:", file);
         const buffer = file.data;
         const uploadResult = file.mimetype.startsWith("image/")
           ? await uploadToCloudinary(buffer, "chat_uploads")
@@ -75,15 +83,20 @@ const sendMessage = async (req, res) => {
         uploadedAttachments.push({
           url: file.mimetype.startsWith("image/") ? uploadResult.secure_url : uploadResult.videoUrl,
           cld_id: uploadResult.public_id || uploadResult.videoCldId,
+          type: file.mimetype
         });
       } catch (error) {
-        console.error("Error uploading attachment:", error);
-        return res.status(500).json({ message: "Failed to upload attachment." });
+        console.error(`Error uploading attachment ${file.name}:`, error);
+        return res.status(500).json({ message: `Failed to upload attachment: ${file.name}` });
       }
     }
 
     let newMessage;
     let chatRoomId;
+    let senderTargetSockets = new Set();
+    if (req.io && req.io.userSocketMap.has(senderId.toString())) {
+      senderTargetSockets = req.io.userSocketMap.get(senderId.toString());
+    }
 
     switch (chatType) {
       case "private":
@@ -99,7 +112,8 @@ const sendMessage = async (req, res) => {
           return res.status(404).json({ message: "Recipient not found." });
         }
 
-        chatRoomId = [senderId.toString(), chatIdOrRecipientId.toString()].sort().join("_");
+        // Use normalized room ID helper here
+        chatRoomId = getRoomId(senderId, chatIdOrRecipientId);
 
         newMessage = new PrivateChat({
           chatId: chatRoomId,
@@ -107,18 +121,16 @@ const sendMessage = async (req, res) => {
           receiverId: chatIdOrRecipientId,
           message: message.trim(),
           attachments: uploadedAttachments,
-          reactions: parsedReactions,
+          reactions: parsedReactions
         });
 
-        console.log("Final private message object:", newMessage);
-
         await Notification.create({
+            senderId: senderId,
           user: chatIdOrRecipientId,
-          senderId: senderId,
           type: "message",
           message: `New message from ${senderName}`,
           content: `New message from ${senderName}`,
-          relatedChat: newMessage._id,
+          relatedChat: newMessage._id
         });
         break;
 
@@ -139,9 +151,8 @@ const sendMessage = async (req, res) => {
           senderId: senderId,
           message: message.trim(),
           attachments: uploadedAttachments,
-          reactions: parsedReactions,
+          reactions: parsedReactions
         });
-        console.log("Final unit message object:", newMessage);
         break;
 
       case "department":
@@ -161,13 +172,12 @@ const sendMessage = async (req, res) => {
           senderId: senderId,
           message: message.trim(),
           attachments: uploadedAttachments,
-          reactions: parsedReactions,
+          reactions: parsedReactions
         });
-        console.log("Final department message object:", newMessage);
         break;
 
       case "general":
-        chatRoomId = `general_chat`;
+        chatRoomId = "general_chat";
 
         newMessage = new GeneralChat({
           chatId: chatRoomId,
@@ -175,33 +185,43 @@ const sendMessage = async (req, res) => {
           message: message.trim(),
           attachments: uploadedAttachments,
           reactions: parsedReactions,
+          tempId: tempId
         });
-        console.log("Final general message object:", newMessage);
         break;
+
+      default:
+        return res.status(400).json({ message: "Unsupported chat type." });
     }
 
     await newMessage.save();
-    console.log("Message saved to database:", newMessage);
+    // console.log("Message saved to database:", newMessage._id);
 
-    if (req.io && chatRoomId) {
-      console.log("Attempting to emit 'receiveMessage' to room:", chatRoomId);
-      req.io.to(chatRoomId).emit("receiveMessage", {
-        chatType,
-        message: newMessage.toObject(), // Ensure to send the plain object
-      });
-      console.log("Emitted 'receiveMessage' to room:", chatRoomId, {
-        chatType,
-        message: newMessage.toObject(),
-      });
+    if (req.io) {
+      const emittedMessage = {
+        ...newMessage.toObject(),
+        senderId: newMessage.senderId.toString(),
+        receiverId: newMessage.receiverId?.toString(),
+        tempId: tempId
+      };
+
+      req.io.to(chatRoomId).emit('receiveMessage', emittedMessage);
+      console.log(`[ChatController] Emitted 'receiveMessage' to room ${chatRoomId}`);
+
+      if (senderTargetSockets.size > 0) {
+        req.io.to([...senderTargetSockets]).emit('messageSentConfirmation', {
+          tempId: tempId,
+          _id: newMessage._id.toString()
+        });
+        // console.log(`[ChatController] Emitted 'messageSentConfirmation' to sender's sockets for tempId: ${tempId}`);
+      }
     } else {
-      console.log("req.io not available or chatRoomId is missing, cannot emit 'receiveMessage'.");
+      console.warn("[ChatController] req.io not available for emitting message.");
     }
-    console.log("Sending HTTP response to client:", JSON.stringify(newMessage.toObject(), null, 2));
 
-    return res.status(201).json({
+    res.status(201).json({
       success: true,
       message: "Message sent successfully",
-      data: newMessage.toObject(),
+      data: newMessage.toObject()
     });
 
   } catch (error) {
@@ -210,7 +230,10 @@ const sendMessage = async (req, res) => {
   }
 };
 
-  // Get messages
+
+module.exports = { sendMessage }; // Export the controller
+
+// Get messages
   const getChatMessages = async (req, res) => {
     try {
       const currentUserId = req.user._id;
@@ -479,13 +502,16 @@ const getPrivateMessages = async (req, res) => {
     const currentUserId = req.user.id;
     const { before } = req.query; // optional timestamp string
 
-    // Validate chatId format (should be string of user IDs separated by '_')
+    // Validate chatId format
     if (!chatId || typeof chatId !== 'string' || !chatId.includes('_')) {
       return res.status(400).json({ message: "Invalid chat ID format." });
     }
 
+    // Sort chatId for consistent querying
     const [user1Id, user2Id] = chatId.split('_').sort();
-    const recipientId = user1Id === currentUserId ? user2Id : user1Id; // Determine the other user
+    const sortedChatId = `${user1Id}_${user2Id}`;
+
+    const recipientId = user1Id === currentUserId ? user2Id : user1Id;
 
     const limit = 20; // messages per fetch
 
@@ -494,7 +520,7 @@ const getPrivateMessages = async (req, res) => {
       {
         senderId: recipientId,
         receiverId: currentUserId,
-        chatId: chatId, // Ensure you are storing chatId in your PrivateChat model
+        chatId: sortedChatId,
         read: false,
       },
       { $set: { read: true } }
@@ -503,9 +529,9 @@ const getPrivateMessages = async (req, res) => {
     // Optional date filter
     const dateFilter = before ? { createdAt: { $lt: new Date(before) } } : {};
 
-    // Find all messages within this chatId before 'before'
+    // Find all messages for this sorted chatId
     const messages = await PrivateChat.find({
-      chatId: chatId,
+      chatId: sortedChatId,
       ...dateFilter,
     })
       .sort({ createdAt: -1 }) // newest first
@@ -514,23 +540,23 @@ const getPrivateMessages = async (req, res) => {
       .populate("receiverId", "username firstName lastName userImage");
 
     messages.reverse(); // oldest first for UI
-    console.log("Retrieved private messages for chatId:", chatId);
+    console.log("Retrieved private messages for chatId:", sortedChatId);
 
     return res.status(200).json({
       success: true,
       messages,
       hasMore: messages.length === limit,
     });
-    
+
   } catch (error) {
     console.error("Error retrieving private messages:", error);
-        // console.log("Retrieved private messages for chatId:", messages);
     return res.status(500).json({
       success: false,
       message: "Internal server error.",
     });
   }
 };
+
   // GET /api/v1/private/:recipientId/exists
   const checkPrivateChatExists = async (req, res) => {
     try {
@@ -576,54 +602,64 @@ const createPrivateChat = async (req, res) => {
       });
     }
 
-    console.log(
-      "Backend - Creating chat between:",
-      currentUserId,
-      "and",
-      recipientId
-    );
+    // console.log(
+    //   "Backend - Creating chat between:",
+    //   currentUserId,
+    //   "and",
+    //   recipientId
+    // );
 
-    // Check if a chat already exists
-    const existingChat = await PrivateChat.findOne({
+    // Check if a private chat already exists in PrivateChat model
+    const existingPrivateChat = await PrivateChat.findOne({
       $or: [
         { senderId: currentUserId, receiverId: recipientId },
         { senderId: recipientId, receiverId: currentUserId },
       ],
     });
 
-    if (existingChat) {
+    if (existingPrivateChat) {
       return res.status(200).json({
         message: "Private chat already exists",
-        chatId: existingChat.chatId,
+        chatId: existingPrivateChat.chatId,
       });
     }
 
-    // Generate a unique chatId
+    // Generate a unique chatId (for PrivateChat model)
     const sortedIds = [String(currentUserId), String(recipientId)].sort();
-    const chatId = `${sortedIds[0]}_${sortedIds[1]}`;
-    console.log("Generated Chat ID:", chatId);
+    const privateChatId = `${sortedIds[0]}_${sortedIds[1]}`;
+    console.log("Generated Private Chat ID:", privateChatId);
 
-    const newChat = new PrivateChat({
-      chatId,
+    // Create a new PrivateChat document
+    const newPrivateChat = new PrivateChat({
+      chatId: privateChatId,
       senderId: currentUserId,
       receiverId: recipientId,
     });
 
-    const savedChat = await newChat.save();
+    const savedPrivateChat = await newPrivateChat.save();
 
-    // Dynamically update both users' privateChats arrays
+    // Create a new Chat document (for the generic Chat model)
+    const newGenericChat = new Chat({
+      type: 'private',
+      participants: [currentUserId, recipientId],
+      _id: savedPrivateChat._id, // Use the _id from PrivateChat for consistency (optional, but can be useful)
+    });
+
+    const savedGenericChat = await newGenericChat.save();
+
+    // Dynamically update both users' privateChats arrays with the _id of the generic Chat document
     await Promise.all([
       User.findByIdAndUpdate(currentUserId, {
-        $addToSet: { privateChats: savedChat._id },
+        $addToSet: { privateChats: savedGenericChat._id },
       }),
       User.findByIdAndUpdate(recipientId, {
-        $addToSet: { privateChats: savedChat._id },
+        $addToSet: { privateChats: savedGenericChat._id },
       }),
     ]);
 
     return res.status(201).json({
       message: "Private chat created successfully",
-      chatId: savedChat.chatId,
+      chatId: savedPrivateChat.chatId, // Still return the PrivateChat chatId for other uses if needed
     });
 
   } catch (err) {
@@ -637,10 +673,6 @@ const createPrivateChat = async (req, res) => {
     try {
       const currentUserId = req.user._id;
       console.log("Backend", currentUserId);
-
-      //     if (!req.user?.privateChatIds?.length) {
-      //   return res.status(200).json([{message: "No chat to display..."}]); // return empty array instead of 400
-      // }
 
       // Fetch distinct chat pairs involving current user
       const messages = await PrivateChat.aggregate([
@@ -922,9 +954,129 @@ const createPrivateChat = async (req, res) => {
       });
     }
   };
-
-
   
+  
+const getCombinedChatlist = async (req, res) => {
+  try {
+    const userId = req.user.id?.toString();
+    if (!userId) {
+      return res.status(401).json({ message: 'Unauthorized - User ID not found in request' });
+    }
+
+    const user = await User.findById(userId)
+      .populate('privateChats')
+      .populate('unitChats')
+      .populate('departmentChats')
+      .populate('generalChats');
+
+    if (!user) {
+      return res.status(404).json({ message: 'User not found' });
+    }
+
+    const privateChatsPromise = PrivateChat.find({
+      _id: { $in: user.privateChats || [] },
+    })
+      .populate({ path: 'senderId', select: 'userName userImage' })
+      .populate({ path: 'receiverId', select: 'userName userImage' })
+      .sort({ createdAt: -1 });
+
+    const unitChatsPromise = UnitChat.find({
+      _id: { $in: user.unitChats || [] },
+    })
+      .populate({ path: 'unit', select: 'name' })
+      .populate({ path: 'senderId', select: 'userName userImage' })
+      .sort({ createdAt: -1 });
+
+    const departmentChatsPromise = DepartmentChat.find({
+      _id: { $in: user.departmentChats || [] },
+    })
+      .populate({ path: 'department', select: 'name' })
+      .populate({ path: 'senderId', select: 'userName userImage' })
+      .sort({ createdAt: -1 });
+
+    const generalChatsPromise = GeneralChat.find({
+      _id: { $in: user.generalChats || [] },
+    })
+      .populate({ path: 'senderId', select: 'userName userImage' })
+      .sort({ createdAt: -1 });
+
+    const [privateChatsResult, unitChatsResult, departmentChatsResult, generalChatsResult] = await Promise.all([
+      privateChatsPromise,
+      unitChatsPromise,
+      departmentChatsPromise,
+      generalChatsPromise,
+    ]);
+
+    const normalized = [
+      ...(privateChatsResult || []).map((chat) => {
+        const senderId = chat.senderId?._id?.toString();
+        const receiverId = chat.receiverId?._id?.toString();
+
+        // 🚫 Skip self-chats
+        if (!senderId || !receiverId || senderId === receiverId) return null;
+
+        const otherParticipant = senderId === userId ? chat.receiverId : chat.senderId;
+
+        return {
+id: `${chat.senderId._id}_${chat.receiverId._id}`, 
+          type: 'private',
+          name: otherParticipant?.userName || 'Private Chat',
+          userImage: otherParticipant?.userImage || [],
+          lastMessage: chat.lastMessage || '',
+          lastMessageTimestamp: chat.createdAt,
+          unreadCount: 0,
+          participants: [
+            {
+              id: otherParticipant?._id?.toString(),
+              userName: otherParticipant?.userName,
+              userImage: otherParticipant?.userImage,
+            },
+          ],
+        };
+      }).filter(Boolean), // ✅ Filter out nulls caused by self-chats or missing data
+
+      ...(unitChatsResult || []).map((chat) => ({
+        id: chat._id.toString(),
+        type: 'unit',
+        name: chat.unit?.name || 'Unit Chat',
+        lastMessage: chat.message || '',
+        lastMessageTimestamp: chat.createdAt,
+        unreadCount: 0,
+        participants: [],
+      })),
+
+      ...(departmentChatsResult || []).map((chat) => ({
+        id: chat._id.toString(),
+        type: 'department',
+        name: chat.department?.name || 'Department Chat',
+        lastMessage: chat.message || '',
+        lastMessageTimestamp: chat.createdAt,
+        unreadCount: 0,
+        participants: [],
+      })),
+
+      ...(generalChatsResult || []).map((chat) => ({
+        id: chat._id.toString(),
+        type: 'general',
+        name: 'General Chat',
+        lastMessage: chat.message || '',
+        lastMessageTimestamp: chat.createdAt,
+        unreadCount: 0,
+        participants: [],
+      })),
+    ];
+
+    normalized.sort(
+      (a, b) => new Date(b.lastMessageTimestamp).getTime() - new Date(a.lastMessageTimestamp).getTime()
+    );
+
+    return res.status(200).json({ data: normalized });
+  } catch (error) {
+    console.error('Error fetching combined chat list:', error);
+    return res.status(500).json({ message: 'Failed to fetch combined chat list' });
+  }
+};
+
   return {
     createPrivateChat,
     deleteMessage,
@@ -941,6 +1093,7 @@ const createPrivateChat = async (req, res) => {
     getDepartmentChatList,
     getGeneralChatList,
     checkPrivateChatExists,
+    getCombinedChatlist
   };
 };
 

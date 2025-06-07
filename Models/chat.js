@@ -8,7 +8,12 @@ const privateChatSchema = new mongoose.Schema({
     receiverId: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
     message: { type: String },
     lastMessage: {type: String},
-    attachments: [{ url: String, cld_id: String }],
+    attachments: [ {
+      url: { type: String, required: true },
+      cld_id: { type: String, required: true },
+      type: { type: String, required: true },
+    }
+    ],
     reactions: [{ user: { type: mongoose.Schema.Types.ObjectId, ref: 'User' }, type: String }],
     read: { type: Boolean, default: false },
     createdAt: { type: Date, default: Date.now }
