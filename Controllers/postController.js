@@ -11,7 +11,7 @@ const postIo = (io) => {
 const createPost = async (req, res) => {
     try {
         const { content } = req.body;
-        const userId = req.user.id;
+        const userId = req.user._id;
         let images = [];
         let videos = [];
 
@@ -104,7 +104,7 @@ const getPosts = async (req, res) => {
 const getAllPosts = async (req, res) => {
     try {
         const posts = await Post.find()
-            .populate("user", "username firstName lastName userImage")
+            .populate("user", "username firstName lastName userImage _id")
             .sort({ createdAt: -1 });
         res.status(200).json({ posts });
     } catch (error) {
@@ -123,12 +123,12 @@ const editPost = async (req, res) => {
     // console.log("🙋🏽 Logged-in User:", req.user);
 
     // Check if user is authenticated
-    if (!req.user || !req.user.id) {
+    if (!req.user || !req.user._id) {
       // console.log(" Unauthorized: Missing user");
       return res.status(401).json({ message: "Unauthorized: Missing user" });
     }
 
-    const loggedInUserId = req.user.id;
+    const loggedInUserId = req.user._id;
 
     // Validate Post ID format
     if (!mongoose.Types.ObjectId.isValid(postId)) {
@@ -171,7 +171,7 @@ const editPost = async (req, res) => {
     try {
       const { text } = req.body;
       const postId = req.params.postId;
-      const userId = req.user.id;
+      const userId = req.user._id;
       let imageUrl = null;
       let videoUrl = null;
 
@@ -296,7 +296,7 @@ const getCommentsForPost = async (req, res) => {
 const deletePost = async (req, res) => {
     try {
         const { postId } = req.params;
-        const userId = req.user.id;
+        const userId = req.user._id;
 
         const post = await Post.findById(postId);
         if (!post) return res.status(404).json({ message: "Post not found" });
@@ -326,7 +326,7 @@ const deletePost = async (req, res) => {
 const likePost = async (req, res) => {
     try {
         const { postId } = req.body;
-        const userId = req.user.id;
+        const userId = req.user._id;
 
         const post = await Post.findById(postId);
         if (!post) return res.status(404).json({ message: "Post not found" });
@@ -349,7 +349,7 @@ const likePost = async (req, res) => {
 const unlikePost = async (req, res) => {
     try {
         const { postId } = req.body;
-        const userId = req.user.id;
+        const userId = req.user._id;
         const post = await Post.findById(postId);
         if (!post) return res.status(404).json({ message: "Post not found" });
         const index = post.likes.findIndex(like => like.user.toString() === userId);
@@ -368,7 +368,7 @@ const unlikePost = async (req, res) => {
 const reactToPost = async (req, res) => {
     try {
         const { postId, reaction } = req.body;
-        const userId = req.user.id;
+        const userId = req.user._id;
 
         const post = await Post.findById(postId);
         if (!post) return res.status(404).json({ message: "Post not found" });

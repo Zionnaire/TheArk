@@ -1,59 +1,34 @@
+// models/chatModels.js
 const mongoose = require('mongoose');
-const { getUnitById } = require('../Controllers/adminController');
 
-// Private Chat Schema (One-on-One)
+// Private Chat Schema (One-on-One Conversation Metadata)
 const privateChatSchema = new mongoose.Schema({
-    chatId: { type: String, required: true }, // your combined chat ID string
+    // This `chatId` is your custom string ID for the pair of users
+    chatId: { type: String, required: true, unique: true, index: true },
     senderId: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
     receiverId: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
-    message: { type: String },
-    lastMessage: {type: String},
-    attachments: [ {
-      url: { type: String, required: true },
-      cld_id: { type: String, required: true },
-      type: { type: String, required: true },
-    }
-    ],
-    reactions: [{ user: { type: mongoose.Schema.Types.ObjectId, ref: 'User' }, type: String }],
-    read: { type: Boolean, default: false },
-    createdAt: { type: Date, default: Date.now }
-});
 
+}, { timestamps: true }); // Keep timestamps for `PrivateChat` document's own creation/update
 
-// Unit Chat Schema
+// Unit Chat Schema (Unit Conversation Metadata)
 const unitChatSchema = new mongoose.Schema({
-      chatId: { type: String, required: true },
-    unit: { type: mongoose.Schema.Types.ObjectId, ref: 'Unit', required: true },
-    senderId: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
-    message: { type: String},
-    attachments: [{ url: String, cld_id: String }],
-    reactions: [{ user: { type: mongoose.Schema.Types.ObjectId, ref: 'User' }, type: String }],
-    read: { type: Boolean, default: false },
-    createdAt: { type: Date, default: Date.now }
-});
+    chatId: { type: String, required: true, unique: true, index: true },
+    unit: { type: mongoose.Schema.Types.ObjectId, ref: 'Unit', required: true, unique: true }, // Ensure unit is unique
+  
+}, { timestamps: true });
 
-// Department Chat Schema 
+// Department Chat Schema (Department Conversation Metadata)
 const departmentChatSchema = new mongoose.Schema({
-      chatId: { type: String, required: true },
-    department: { type: mongoose.Schema.Types.ObjectId, ref: 'Department', required: true },
-    senderId: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
-    message: { type: String },
-    attachments: [{ url: String, cld_id: String }],
-    reactions: [{ user: { type: mongoose.Schema.Types.ObjectId, ref: 'User' }, type: String }],
-    read: { type: Boolean, default: false },
-    createdAt: { type: Date, default: Date.now }
-});
+    chatId: { type: String, required: true, unique: true, index: true },
+    department: { type: mongoose.Schema.Types.ObjectId, ref: 'Department', required: true, unique: true }, // Ensure department is unique
+   
+}, { timestamps: true });
 
-// General Chat Schema
+// General Chat Schema (General Church-wide Conversation Metadata)
 const generalChatSchema = new mongoose.Schema({
-      chatId: { type: String, required: true },
-    senderId: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
-    message: { type: String },
-    attachments: [{ url: String, cld_id: String }],
-    reactions: [{ user: { type: mongoose.Schema.Types.ObjectId, ref: 'User' }, type: String }],
-    read: { type: Boolean, default: false },
-    createdAt: { type: Date, default: Date.now }
-});
+    chatId: { type: String, required: true, unique: true, index: true },
+  
+}, { timestamps: true });
 
 const PrivateChat = mongoose.model('PrivateChat', privateChatSchema);
 const UnitChat = mongoose.model('UnitChat', unitChatSchema);

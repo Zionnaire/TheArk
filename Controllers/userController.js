@@ -82,7 +82,7 @@ const register = async (req, res) => {
 
     const responsePayload = {
       message: `Verification code sent to ${newUser.email}`,
-      Id: newUser._id,
+      _id: newUser._id,
       email: newUser.email,
       role: newUser.role,
       userName: newUser.userName,
@@ -116,23 +116,23 @@ const login = async (req, res) => {
   try {
     const { email, password } = req.body;
 
-    // Check if user exists
+    // Check if user exists and populate chat references
     let user = await User.findOne({ email })
       .populate({
         path: "unitChats",
-        populate: { path: "lastMessage", select: "content sender createdAt" },
+        populate: { path: "lastMessage", select: "messageText sender createdAt" }, // Changed 'content' to 'messageText'
       })
       .populate({
         path: "departmentChats",
-        populate: { path: "lastMessage", select: "content sender createdAt" },
+        populate: { path: "lastMessage", select: "messageText sender createdAt" }, // Changed 'content' to 'messageText'
       })
       .populate({
         path: "privateChats",
-        populate: { path: "lastMessage", select: "content sender createdAt" },
+        populate: { path: "lastMessage", select: "messageText sender createdAt" }, // Changed 'content' to 'messageText'
       })
       .populate({
         path: "generalChats",
-        populate: { path: "lastMessage", select: "content sender createdAt" },
+        populate: { path: "lastMessage", select: "messageText sender createdAt" }, // Changed 'content' to 'messageText'
       });
 
     if (!user) {
@@ -145,17 +145,18 @@ const login = async (req, res) => {
       return res.status(400).json({ message: "Invalid credentials" });
     }
 
-    // Create JWT tokens
-    const token = signJwt({ user, role: user.role, name: user.firstName, id: user.id });
+    // Create JWT tokens using the updated middleware functions
+    // Removed '_id: user._id' as it's redundant; signJwt derives it from the 'user' object.
+    const token = signJwt({ user, role: user.role, name: user.firstName });
+    // Corrected parameter for signRefreshToken from '_id' to 'id'.
     const refreshToken = signRefreshToken({ id: user._id });
-    //  const decoded = jwtDecode<TokenPayload>(token);
 
     // Respond with user data and tokens
     res.json({
       token,
       refreshToken,
       user: {
-        id: user.id,
+        _id: user._id,
         role: user.role,
         firstName: user.firstName,
         lastName: user.lastName,
@@ -164,36 +165,57 @@ const login = async (req, res) => {
         phoneNumber: user.phoneNumber,
         isActive: user.isActive,
         isEmailVerified: user.isEmailVerified,
-        userImage: user.userImage,
+        userImage: user.userImage, // Assuming userImage is an array of objects
         bio: user.bio,
         posts: user.posts,
         socialMedia: user.socialMedia,
 
+        // Map populated chat data
         unitChats: user.unitChats?.map(chat => ({
-          id: chat._id,
-          lastMessage: chat.lastMessage || null,
+          _id: chat._id,
+          lastMessage: chat.lastMessage ? {
+            _id: chat.lastMessage._id,
+            messageText: chat.lastMessage.messageText, // Use messageText
+            sender: chat.lastMessage.sender, // This will be the ID if not populated further
+            createdAt: chat.lastMessage.createdAt,
+          } : null,
         })),
 
         departmentChats: user.departmentChats?.map(chat => ({
-          id: chat._id,
-          lastMessage: chat.lastMessage || null,
+          _id: chat._id,
+          lastMessage: chat.lastMessage ? {
+            _id: chat.lastMessage._id,
+            messageText: chat.lastMessage.messageText,
+            sender: chat.lastMessage.sender,
+            createdAt: chat.lastMessage.createdAt,
+          } : null,
         })),
 
         privateChats: user.privateChats?.map(chat => ({
-          id: chat._id,
-          lastMessage: chat.lastMessage || null,
+          _id: chat._id,
+          lastMessage: chat.lastMessage ? {
+            _id: chat.lastMessage._id,
+            messageText: chat.lastMessage.messageText,
+            sender: chat.lastMessage.sender,
+            createdAt: chat.lastMessage.createdAt,
+          } : null,
         })),
 
         generalChats: user.generalChats?.map(chat => ({
-          id: chat._id,
-          lastMessage: chat.lastMessage || null,
+          _id: chat._id,
+          lastMessage: chat.lastMessage ? {
+            _id: chat.lastMessage._id,
+            messageText: chat.lastMessage.messageText,
+            sender: chat.lastMessage.sender,
+            createdAt: chat.lastMessage.createdAt,
+          } : null,
         })),
       },
     });
 
   } catch (err) {
-    console.error(err.message);
-    logger?.error?.(err.message); // Optional: your custom logger
+    console.error("Login Error:", err.message);
+    // logger?.error?.(err.message); // Optional: your custom logger if defined globally/imported
     res.status(500).send("Server error");
   }
 };
@@ -206,7 +228,7 @@ const logoutUser = async (req, res) => {
         res.clearCookie('token');
         res.clearCookie('refreshToken');
         // Optionally, you can also invalidate the token on the server side
-          await RefreshToken.deleteOne({ token: refreshToken }); 
+        await signRefreshToken.deleteOne({ token: refreshToken });
         // Send response
         res.status(200).json({ message: 'Logged out successfully' });
     } catch (error) {
@@ -220,14 +242,14 @@ const getProfile = async (req, res) => {
   try {
     // console.log("User from token:", req.user);
     // Ensure the user is authenticated
-    if (!req.user || !req.user.id) {
+    if (!req.user || !req.user._id) {
       return res
         .status(401)
         .json({ message: "Unauthorized: No token provided" });
     }
 
-    // Fetch user from database 
-    const userId = req.user.id; 
+    // Fetch user from database
+    const userId = req.user._id;
 
     const user = await User.findById(userId).select("-password");
 
@@ -260,7 +282,7 @@ const updateProfile = async (req, res) => {
 
     console.log("This is req user", req.user);
 
-    const userId = req.user?.id;
+    const userId = req.user?._id;
 
     if (!userId) {
       return res.status(401).json({ message: "Unauthorized: No token provided" });
@@ -337,19 +359,23 @@ const updateProfile = async (req, res) => {
 };
 
 // Get a user by ID (from authenticated user or params)
+// Get a single user by ID
 const getAUserById = async (req, res) => {
   try {
-    const { userId } = req.params; //  get ID from route params
+    const { userId } = req.params; // Get ID from route params
 
+    // Populate followers and following with just necessary UserMiniProfile fields
     const user = await User.findById(userId)
       .select("-password") // exclude sensitive info
-      .populate("followers", "firstName lastName userImage")
-      .populate("following", "firstName lastName userImage");
+      .populate("followers", "userName firstName lastName userImage _id") // Ensure _id is selected for populated fields
+      .populate("following", "userName firstName lastName userImage _id"); // Ensure _id is selected for populated fields
 
     if (!user) {
       return res.status(404).json({ message: "User not found" });
     }
 
+    // Return the user object directly. Mongoose document will have _id.
+    // If you need a plain JavaScript object, use .lean() or .toObject()
     return res.status(200).json({ user });
   } catch (err) {
     console.error("Error fetching user:", err);
@@ -358,40 +384,23 @@ const getAUserById = async (req, res) => {
 };
 
 
-// Get all users
+// Get all users (excluding current user)
 const getAllUsers = async (req, res) => {
   try {
-    const currentUserId = req.user?.id;
-    // console.log(currentUserId);
-    
+    const currentUserId = req.user?._id; // Assuming req.user._id is set by verifyToken middleware
 
+    // Fetch users, excluding the current user, and select specific fields.
+    // .lean() makes the result plain JavaScript objects, which is generally good for API responses.
     const users = await User.find(
       { _id: { $ne: currentUserId } },
-      'userName firstName lastName phoneNumber email userImage'
+      'userName firstName lastName phoneNumber email userImage isOnline _id' // Ensure _id is selected
     ).lean();
 
-    // console.log(users);
-    
-
-    // Map _id to id for frontend friendliness
-    const formattedUsers = users.map(user => ({
-      ...user,
-      id: user._id,
-  userName: user.userName,
-  firstName: user.firstName,
-  lastName: user.lastName,
-  userImage: user.userImage,
-  phoneNumber: user.phoneNumber
-    }));
-
-    // console.log(formattedUsers);
-    
-
-    res.json(formattedUsers);
+    res.json(users); // Send the raw lean objects
   } catch (err) {
     console.error("getAllUsers error:", err.message);
     res.status(500).send("Server error");
-    logger.error(err);
+    // logger.error(err); // Assuming logger is defined
   }
 };
 

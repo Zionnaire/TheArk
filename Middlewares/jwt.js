@@ -1,154 +1,194 @@
 const jwt = require("jsonwebtoken");
-const Admin = require("../Models/admin");
-const User = require("../Models/user");
-const Church = require("../Models/churchesAdmin");
+const Admin = require("../Models/admin"); // Assuming this path is correct
+const User = require("../Models/user");   // Assuming this path is correct
+const Church = require("../Models/churchesAdmin"); // Assuming this path is correct
 
-
-
-const signJwt = ({ user = null, church = null, role = "user" || "churchAdmin", name = "firstName" || "churchName"}) => {
+/**
+ * Signs a JSON Web Token for a user or church admin.
+ * @param {object} options - Options for signing the JWT.
+ * @param {object} [options.user] - The user Mongoose document.
+ * @param {object} [options.church] - The church Mongoose document.
+ * @param {string} [options.role] - The role to assign ('member' or 'churchAdmin').
+ * @returns {string} The signed JWT.
+ * @throws {Error} If neither user nor church is provided.
+ */
+const signJwt = ({ user = null, church = null, role }) => {
   let payload = {};
+  let resolvedRole = role; // Use provided role first
 
   if (user) {
+    if (!role) resolvedRole = "member"; // Default to 'member' if no role provided for user
     payload = {
-      id: user._id,           
-      userId: user._id,     
-      role,
-      name: user[name] || user.firstName || user.churchName,
-      
+      id: user._id, // Use _id as the primary ID in the token
+      userId: user._id, // Explicitly keep userId for clarity if desired by frontend
+      role: resolvedRole,
+      // Prioritize userName, then firstName, then lastName, then a fallback
+      name: user.userName || user.firstName || user.lastName || "User",
     };
   } else if (church) {
+    if (!role) resolvedRole = "churchAdmin"; // Default to 'churchAdmin' if no role provided for church
     payload = {
-      id: church._id,
-      churchId: church._id,
-      role: "churchAdmin",
-      name: church.churchName || church.name, 
-    
+      id: church._id, // Use _id as the primary ID in the token
+      churchId: church._id, // Explicitly keep churchId for clarity if desired by frontend
+      role: resolvedRole,
+      name: church.churchName || church.name || "Church Admin", // Prioritize churchName, then name, then fallback
     };
   } else {
     throw new Error("Either user or church must be provided to sign a token.");
   }
 
+  // Ensure JWT_SECRET is loaded from environment variables
+  if (!process.env.JWT_SECRET) {
+    console.error("JWT_SECRET is not defined in environment variables!");
+    throw new Error("Server configuration error: JWT_SECRET missing.");
+  }
+
   return jwt.sign(payload, process.env.JWT_SECRET, {
-    expiresIn: "2h",
+    expiresIn: "2h", // Token expiry
   });
 };
 
+/**
+ * Middleware to verify JWT token and populate req.user with authenticated entity data.
+ * @param {object} req - Express request object.
+ * @param {object} res - Express response object.
+ * @param {function} next - Express next middleware function.
+ */
 const verifyToken = async (req, res, next) => {
   try {
-    const authHeader = req.headers.authorization;
-    if (!authHeader || !authHeader.toLowerCase().startsWith("bearer ")) {
-      return res.status(400).json({ message: "Invalid authorization header" });
+    const Header = req.headers.authorization;
+    console.log(`[verifyToken Middleware] Request Path: ${req.path}, Method: ${req.method}`); // Added path/method logging
+    console.log("[verifyToken Middleware] Incoming Authorization Header:", Header); // Debug log
+
+    if (!Header || !Header.toLowerCase().startsWith("bearer ")) {
+      console.warn("[verifyToken Middleware] Missing or malformed Authorization header.", { Header }); // More detailed warning
+      return res.status(401).json({ message: "Authentication failed: Missing or malformed header" });
     }
 
-    const token = authHeader.split(" ")[1];
+    const token = Header.split(" ")[1];
+    if (!token) {
+        console.warn("[verifyToken Middleware] Token is empty after splitting 'Bearer'.");
+        return res.status(401).json({ message: 'Authentication failed: Token not found' });
+    }
+
+    // Ensure JWT_SECRET is loaded from environment variables
+    if (!process.env.JWT_SECRET) {
+      console.error("JWT_SECRET is not defined in environment variables!");
+      return res.status(500).json({ message: "Server configuration error: JWT_SECRET missing." });
+    }
+
     const decoded = jwt.verify(token, process.env.JWT_SECRET);
+    console.log("[verifyToken Middleware] Token successfully decoded:", decoded); // Keep this debug log
 
-    const { id, role } = decoded;
+    // Extract primary ID and role from decoded token payload
+    const { id, role, userId, churchId } = decoded;
+
     if (!id || !role) {
-      return res.status(401).json({ message: "Invalid token structure" });
+      console.warn("[verifyToken Middleware] Invalid token structure: missing ID or role.", decoded); // More detailed warning
+      return res.status(401).json({ message: "Authentication failed: Invalid token payload structure (missing ID or role)" });
     }
 
-    const resolveName = (obj) => obj.churchName || obj.name || obj.firstName || "User";
+    // Helper to resolve name from a user/church object
+    const resolveName = (obj) => {
+      if (!obj) return "Unknown";
+      if (obj.churchName) return obj.churchName;
+      if (obj.name) return obj.name; // For generic 'name' field
+      if (obj.firstName) return obj.firstName;
+      if (obj.userName) return obj.userName;
+      return "User"; // Fallback
+    };
 
-    // For churchAdmin
+    let populatedEntity;
+    let isAdmin = false;
+    let isChurchAdmin = false;
+    let assignedRole = role; // Start with the role from the token
+    let churchRefId = null;
+
+    // Handle churchAdmin role
     if (role === "churchAdmin") {
-      const church = await Church.findById(decoded.churchId || id);
-      if (!church) {
-        return res.status(404).json({ message: "Church not found" });
+      populatedEntity = await Church.findById(churchId || id);
+      if (!populatedEntity) {
+        console.warn(`[verifyToken Middleware] Church (ID: ${churchId || id}) not found for churchAdmin role.`); // More detailed warning
+        return res.status(404).json({ message: "Authentication failed: Church admin account not found" });
+      }
+      isChurchAdmin = true;
+      churchRefId = populatedEntity._id; // Ensure churchId is the actual _id
+    } else { // Handle 'member' or other user roles
+      populatedEntity = await User.findById(userId || id)
+        .populate('unitChats')
+        .populate('departmentChats')
+        .populate('generalChats')
+        .populate('privateChats');
+
+      if (!populatedEntity) {
+        console.warn(`[verifyToken Middleware] User (ID: ${userId || id}) not found for role: ${role}.`); // More detailed warning
+        return res.status(404).json({ message: "Authentication failed: User account not found" });
       }
 
-      req.user = {
-        id: church._id,
-        churchId: church._id,
-        role: "churchAdmin",
-        isChurchAdmin: true,
-        name: resolveName(church),
-      };
+      // Check if this user is also an Admin or ChurchAdmin based on their email/ID
+      const [foundAdmin, foundChurchAdmin] = await Promise.all([
+        Admin.findOne({ user: populatedEntity._id }).lean(),
+        Church.findOne({ churchEmail: populatedEntity.email }).lean(),
+      ]);
 
-      return next();
+      if (foundAdmin) {
+        isAdmin = true;
+      }
+      if (foundChurchAdmin) {
+        isChurchAdmin = true;
+        churchRefId = foundChurchAdmin._id;
+        if (assignedRole === 'member') {
+            assignedRole = 'churchAdmin';
+        }
+      }
     }
 
-    // For normal user
- const user = await User.findById(decoded.userId || id)
-  .populate('unitChats', 'unitName')
-  .populate('departmentChats', 'departmentName')
-  .populate('generalChats', 'name')
-  .populate('privateChats', 'sender receiver'); // Or whatever fields you need
-  
+    // Construct req.user object based on the populated entity and resolved roles
+    req.user = {
+      _id: populatedEntity._id.toString(), // Ensure _id is present for validateToken controller
+      id: populatedEntity._id.toString(), // Keep 'id' for consistency if other parts use it
+      role: assignedRole,
+      isAdmin: isAdmin,
+      isChurchAdmin: isChurchAdmin,
+      name: resolveName(populatedEntity),
+      churchId: churchRefId ? churchRefId.toString() : null,
+      userId: (role !== "churchAdmin" && populatedEntity._id) ? populatedEntity._id.toString() : undefined, // userId if it's a user
+      unitChats: populatedEntity.unitChats ? populatedEntity.unitChats.map(chat => ({
+        id: chat._id.toString(),
+        name: chat.unitName || "Unnamed Unit",
+      })) : [],
+      departmentChats: populatedEntity.departmentChats ? populatedEntity.departmentChats.map(chat => ({ // FIXED: populatedId -> populatedEntity
+        id: chat._id.toString(),
+        name: chat.departmentName || "Unnamed Dept",
+      })) : [],
+      generalChatIds: populatedEntity.generalChats ? populatedEntity.generalChats.map(chat => chat._id.toString()) : [],
+      privateChatIds: populatedEntity.privateChats ? populatedEntity.privateChats.map(chat => chat._id.toString()) : [],
+    };
 
+    console.log("[verifyToken Middleware] req.user populated successfully:", req.user); // Debug log
 
-    if (!user) {
-      return res.status(404).json({ message: "User not found" });
-    }
-
-
-      // Check if user is also an Admin or ChurchAdmin
-    const [admin, churchAdmin] = await Promise.all([
-      Admin.findOne({ user: user._id }).lean(),
-      Church.findOne({ churchEmail: user.email }).lean(),
-    ]);
-
-    const firstUnitChat = Array.isArray(user.unitChats) && user.unitChats.length > 0
-      ? user.unitChats[0]
-      : null;
-
-    const firstDepartmentChat = Array.isArray(user.departmentChats) && user.departmentChats.length > 0
-      ? user.departmentChats[0]
-      : null;
-
-req.user = {
-  id: user._id,
-  role: role || "member",
-  isAdmin: !!admin,
-  isChurchAdmin: !!churchAdmin,
-  name: resolveName(user),
-  churchId: churchAdmin?._id || null,
-
-  unitChats: user.unitChats.map(chat => ({
-    id: chat._id,
-    name: chat.unitName || "Unnamed Unit",
-  })),
-
-  departmentChats: user.departmentChats.map(chat => ({
-    id: chat._id,
-    name: chat.departmentName || "Unnamed Dept",
-  })),
-
-  generalChatIds: user.generalChats.map(chat => chat._id),
-  privateChatIds: user.privateChats.map(chat => chat._id),
-};
-
-  
-
-    if (admin) {
-      req.user.isAdmin = true;
-    }
-
-    if (churchAdmin) {
-      req.user.isChurchAdmin = true;
-      req.user.churchId = churchAdmin._id;
-      req.user.role = "churchAdmin"; // Update role context
-      req.user.name = resolveName(churchAdmin);
-    }
-
-    next();
-
+    next(); // Proceed to the next middleware or controller
   } catch (error) {
     console.error("Error verifying token:", error);
-    return res.status(401).json({
-      message: error.name === "TokenExpiredError" ? "Token has expired" : "Invalid token",
-    });
+    let errorMessage = "Authentication failed: Invalid token";
+    if (error.name === "TokenExpiredError") {
+      errorMessage = "Authentication failed: Token has expired";
+    } else if (error.name === "JsonWebTokenError") {
+      errorMessage = "Authentication failed: Invalid token signature or format";
+    }
+    return res.status(401).json({ message: errorMessage });
   }
 };
 
-
-
 const signRefreshToken = ({ id }) => {
+  if (!process.env.REFRESH_TOKEN_SECRET) {
+    console.error("REFRESH_TOKEN_SECRET is not defined in environment variables!");
+    throw new Error("Server configuration error: REFRESH_TOKEN_SECRET missing.");
+  }
   return jwt.sign({ id }, process.env.REFRESH_TOKEN_SECRET, {
-    expiresIn: "7d", 
+    expiresIn: "7d",
   });
 };
-
 
 module.exports = {
   signJwt,

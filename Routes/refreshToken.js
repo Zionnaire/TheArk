@@ -7,7 +7,7 @@ const { signJwt, signRefreshToken } = require('../Middlewares/jwt');
 const refreshRouter = express.Router();
 refreshRouter.use(express.json());
 
-refreshRouter.post('/api/v1/auth/refresh-token', async (req, res) => {
+refreshRouter.post('/refresh-token', async (req, res) => {
   const { refreshToken } = req.body;
 
   if (!refreshToken) {
@@ -17,12 +17,12 @@ refreshRouter.post('/api/v1/auth/refresh-token', async (req, res) => {
   try {
     const payload = jwt.verify(refreshToken, process.env.REFRESH_TOKEN_SECRET);
 
-    const stored = await RefreshToken.findOne({ userId: payload.id, token: refreshToken });
+    const stored = await RefreshToken.findOne({ userId: payload._id, token: refreshToken });
     if (!stored || stored.expiresAt < new Date()) {
       return res.status(403).json({ message: "Refresh token invalid or expired" });
     }
 
-    const user = await User.findById(payload.id);
+    const user = await User.findById(payload._id);
     if (!user) return res.status(404).json({ message: "User not found" });
 
     const newAccessToken = signJwt({ user });
