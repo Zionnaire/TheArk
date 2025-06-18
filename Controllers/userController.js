@@ -23,6 +23,7 @@ const transporter = nodemailer.createTransport({
   },
 });
 
+
 const register = async (req, res) => {
   try {
     const {
@@ -67,7 +68,7 @@ const register = async (req, res) => {
     });
 
     const token = signJwt({ user: newUser, role: newUser.role, name: newUser.firstName });
-    const refreshToken = signRefreshToken({ id: newUser._id });
+    const refreshToken = signRefreshToken({ _id: newUser._id, role: newUser.role });
 
     // Save again to ensure the code is persisted
     await newUser.save({ validateBeforeSave: false });
@@ -149,7 +150,7 @@ const login = async (req, res) => {
     // Removed '_id: user._id' as it's redundant; signJwt derives it from the 'user' object.
     const token = signJwt({ user, role: user.role, name: user.firstName });
     // Corrected parameter for signRefreshToken from '_id' to 'id'.
-    const refreshToken = signRefreshToken({ id: user._id });
+    const refreshToken = signRefreshToken({_id: user._id, role: user.role });
 
     // Respond with user data and tokens
     res.json({
@@ -310,6 +311,8 @@ const updateProfile = async (req, res) => {
       user.socialMedia = parsed;
     }
 
+    console.log(req.files, "This is req files");
+    
     // Image upload
     if (req.files && req.files.userImage) {
       const file = Array.isArray(req.files.userImage)
@@ -665,6 +668,94 @@ const deleteUser = async (req, res) => {
   }
 };
 
+
+const followUser = async (req, res) => {
+  try {
+    const currentUserId = req.user._id;
+    const targetUserId = req.params.id;
+
+    if (currentUserId === targetUserId) {
+      return res.status(400).json({ message: "You can't follow yourself" });
+    }
+
+    const currentUser = await User.findById(currentUserId);
+    const targetUser = await User.findById(targetUserId);
+
+    if (!targetUser) {
+      return res.status(404).json({ message: "User to follow not found" });
+    }
+
+    if (currentUser.following.includes(targetUserId)) {
+      return res.status(400).json({ message: "Already following this user" });
+    }
+
+    currentUser.following.push(targetUserId);
+    targetUser.followers.push(currentUserId);
+
+    // Optional: Replace these with direct assignments if preferred
+    await currentUser.incrementFollowingCount?.();
+    await targetUser.incrementFollowersCount?.();
+
+    await currentUser.save();
+    await targetUser.save();
+
+    res.status(200).json({ message: "Followed successfully" });
+  } catch (err) {
+    console.error("Follow error:", err);
+    res.status(500).json({ message: "Internal server error" });
+  }
+};
+
+
+const unfollowUser = async (req, res) => {
+  try {
+    const currentUserId = req.user._id;
+    const targetUserId = req.params.id;
+
+    if (currentUserId === targetUserId) {
+      return res.status(400).json({ message: "You can't unfollow yourself" });
+    }
+
+    const currentUser = await User.findById(currentUserId);
+    const targetUser = await User.findById(targetUserId);
+
+    if (!targetUser) {
+      return res.status(404).json({ message: "User not found" });
+    }
+
+    currentUser.following = currentUser.following.filter(
+      id => id.toString() !== targetUserId
+    );
+    targetUser.followers = targetUser.followers.filter(
+      id => id.toString() !== currentUserId
+    );
+
+    await currentUser.incrementFollowingCount?.();
+    await targetUser.incrementFollowersCount?.();
+
+    await currentUser.save();
+    await targetUser.save();
+
+    res.status(200).json({ message: "Unfollowed successfully" });
+  } catch (err) {
+    console.error("Unfollow error:", err);
+    res.status(500).json({ message: "Internal server error" });
+  }
+};
+
+
+
+// Fetch followers
+const getFollowers = async (req, res) => {
+  await getUserConnections(req, res, "followers");
+};
+
+// Fetch following
+const getFollowing = async (req, res) => {
+  await getUserConnections(req, res, "following");
+};
+
+
 module.exports = {
   register,
   login,
@@ -679,5 +770,45 @@ module.exports = {
   joinChurch,
   forgetPassword,
   resetPassword,
-  getAUserById
+  getAUserById,
+  getFollowers,
+  getFollowing,
+  followUser,
+  unfollowUser,
+};
+
+
+const getUserConnections = async (req, res, field) => {
+  try {
+    const userId = req.user._id;
+
+    const user = await User.findById(userId)
+      .populate({
+        path: field,
+        select: "userName firstName lastName userImage _id",
+      })
+      .select(`${field} ${field}Count`)
+      .lean();
+
+    if (!user) {
+      return res.status(404).json({ message: "User not found" });
+    }
+
+    // Handle userImage as an array of objects, extract `url` only
+    const formattedConnections = user[field].map(connection => ({
+      _id: connection._id,
+      userName: connection.userName,
+      firstName: connection.firstName,
+      lastName: connection.lastName,
+      userImage: connection.userImage?.[0]?.url || null,
+    }));
+
+    return res.status(200).json({
+      count: user[`${field}Count`] || formattedConnections.length,
+      [field]: formattedConnections,
+    });
+  } catch (error) {
+    console.error(`Error fetching ${field}:`, error);
+    return res.status(500).json({ message: "Internal server error" });
+  }
 };

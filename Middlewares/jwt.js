@@ -180,12 +180,12 @@ const verifyToken = async (req, res, next) => {
   }
 };
 
-const signRefreshToken = ({ id }) => {
+const signRefreshToken = ({_id }) => {
   if (!process.env.REFRESH_TOKEN_SECRET) {
     console.error("REFRESH_TOKEN_SECRET is not defined in environment variables!");
     throw new Error("Server configuration error: REFRESH_TOKEN_SECRET missing.");
   }
-  return jwt.sign({ id }, process.env.REFRESH_TOKEN_SECRET, {
+  return jwt.sign({ _id }, process.env.REFRESH_TOKEN_SECRET, {
     expiresIn: "7d",
   });
 };

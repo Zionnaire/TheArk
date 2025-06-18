@@ -95,24 +95,40 @@ const deleteReply = async (req, res) => {
 const likeReply = async (req, res) => {
   try {
     const { replyId } = req.params;
-    const userId = req.user.id;
+    const userId = req.user._id;
 
     const reply = await Reply.findById(replyId);
+    console.log("reply:", reply );
+    
     if (!reply) return res.status(404).json({ message: "Reply not found" });
 
-    // Check if user has already liked
-    if (reply.likes.some((like) => like.user.toString() === userId)) {
-      return res.status(400).json({ message: "You already liked this reply" });
+    const alreadyLikedIndex = reply.likes.findIndex(
+      (like) => like.user.toString() === userId
+    );
+
+    let likedByUser;
+    if (alreadyLikedIndex > -1) {
+      // User already liked — remove the like
+      reply.likes.splice(alreadyLikedIndex, 1);
+      likedByUser = false;
+    } else {
+      // Add like
+      reply.likes.push({ user: userId });
+      likedByUser = true;
     }
 
-    reply.likes.push({ user: userId });
     await reply.save();
 
-    res.status(200).json(reply);
+    res.status(200).json({
+      reply,
+      likedByUser,
+    });
   } catch (error) {
+    console.error("likeReply error:", error);
     res.status(500).json({ message: error.message });
   }
 };
+
 
 // Unlike a reply
 const unlikeReply = async (req, res) => {

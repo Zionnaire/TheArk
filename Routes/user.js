@@ -13,7 +13,11 @@ const {
     joinChurch,
     forgetPassword,
     resetPassword, 
-    getAUserById
+    getAUserById,
+    getFollowers,
+    getFollowing,
+    followUser,
+    unfollowUser
 } = require("../Controllers/userController");
 const upload = require("../Middlewares/upload");
 // const { authenticateToken } = require("../Middlewares/authAccess");
@@ -51,6 +55,18 @@ userRouter.post("/forgetPassword", forgetPassword);
 
 // reset password
 userRouter.post("/resetPassword", resetPassword);
+
+// Get followers of a user
+userRouter.get("/:id/followers", verifyToken, getFollowers);
+
+// Get following of a user
+userRouter.get("/:id/following", verifyToken, getFollowing);
+
+// Follow a user
+userRouter.put("/:id/follow", verifyToken, followUser);
+
+// Unfollow a user
+userRouter.put("/:id/unfollow", verifyToken, unfollowUser);
 
 // Deactivate user
 userRouter.put("/deactivate/:id", verifyToken, deactivateUser);

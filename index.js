@@ -12,6 +12,7 @@ const Message = require("./Models/messages");
 const AllChats = require("./Models/AllChats");
 const User = require("./Models/user"); // Assuming User model for markMessageAsRead
 const Notification = require("./Models/notification"); // Assuming Notification model for notifications
+const Chat = require("./Models/chat"); // Assuming Chat model for chat-related operations
 
 // Initialize Express app
 const app = express();
@@ -67,7 +68,7 @@ const unitRouter = require('./Routes/unit');
 const commentRouter = require("./Routes/comment");
 const refreshRouter = require("./Routes/refreshToken");
 const validationRouter = require("./Routes/validation");
-const verifyToken = require("./Middlewares/jwt"); // Ensure this path is correct if used in routes
+const notificationRouter = require("./Routes/notification");
 
 // --- Socket.io Connection Logic ---
 io.on("connection", (socket) => {
@@ -201,6 +202,29 @@ io.on("connection", (socket) => {
         // Ensure notificationData matches the NotificationEventData interface
         io.to(notificationData.recipientId).emit('newNotification', notificationData);
     });
+
+    socket.on("receive_comment", (data) => {
+        const { postId, comment } = data;
+        console.log(`Comment received for post ${postId}:`, comment);
+        // Emit the comment to the post's room
+        io.to(postId).emit("receive_comment", { postId, comment });
+    });
+
+    socket.on("receive_reply", (data) => {
+        const { commentId, reply } = data;
+        console.log(`Reply received for comment ${commentId}:`, reply);
+        // Emit the reply to the comment's room
+        io.to(commentId).emit("receive_reply", { commentId, reply });   
+    });
+
+    socket.on("update_comment_like", (data) => {
+        const { commentId, likedByUser, likesCount } = data;
+        console.log(`Likes updated for comment ${commentId}:`, likedByUser);
+        // Emit the updated likes to the comment's room
+        io.to(commentId).emit("update_comment_like", { commentId, likesCount, likedByUser });
+    });
+
+    
     
 
     socket.on("disconnect", () => {
@@ -239,6 +263,7 @@ app.use("/api/v1/chatGroups", chatGroupRouter);
 app.use("/api/v1/units", unitRouter);
 app.use("/api/v1/comments", commentRouter);
 app.use("/api/v1/auth", refreshRouter);
+app.use("/api/v1/notifications", notificationRouter);
 
 // Start the server
 const port = process.env.PORT || 5000;

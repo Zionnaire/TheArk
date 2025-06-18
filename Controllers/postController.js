@@ -2,13 +2,14 @@ const mongoose = require('mongoose');
 const Post = require("../Models/post");
 const User = require("../Models/user");
 const Comment = require("../Models/comment");
-const { uploadToCloudinary, uploadVideoToCloudinary } = require("../Middlewares/cloudinaryUpload");
+const { uploadToCloudinary, uploadVideoToCloudinary, deleteFromCloudinary } = require("../Middlewares/cloudinaryUpload");
 const logger = require("../Middlewares/logger");
 
 const postIo = (io) => {
 
 // Create a Post
 const createPost = async (req, res) => {
+   const io = req.app.get('io'); 
     try {
         const { content } = req.body;
         const userId = req.user._id;
@@ -54,8 +55,6 @@ if (videoFiles) {
             unlikes: [],
             reactions: [],
             commentCount: 0,
-            createdAt: new Date(),
-            updatedAt: new Date(),
         });
 
         await user.save({validateBeforeSave: false});
@@ -70,6 +69,7 @@ if (videoFiles) {
 
 // Search & filter posts
 const getPosts = async (req, res) => {
+   const io = req.app.get('io'); 
     try {
         const { search, user, startDate, endDate, sort, reaction } = req.query;
         let query = {};
@@ -93,7 +93,7 @@ const getPosts = async (req, res) => {
         if (sort === "likes") sortOptions = { likes: -1 };
         if (sort === "comments") sortOptions = { comments: -1 };
 
-        const posts = await Post.find(query).populate("user", "username").sort(sortOptions);
+        const posts = await Post.find(query).populate("user", "username firstName lastName userImage _id").sort(sortOptions);
         res.status(200).json({ posts });
     } catch (error) {
         res.status(500).json({ message: error.message });
@@ -102,10 +102,13 @@ const getPosts = async (req, res) => {
 
 // Get All Posts
 const getAllPosts = async (req, res) => {
+   const io = req.app.get('io'); 
     try {
         const posts = await Post.find()
             .populate("user", "username firstName lastName userImage _id")
             .sort({ createdAt: -1 });
+            console.log("🧠 Populated user from post:", posts[0].user);
+
         res.status(200).json({ posts });
     } catch (error) {
         res.status(500).json({ message: error.message });
@@ -114,6 +117,7 @@ const getAllPosts = async (req, res) => {
 
 // Edit a Post
 const editPost = async (req, res) => {
+   const io = req.app.get('io'); 
   try {
     const { content } = req.body;
     const { postId } = req.params;
@@ -138,7 +142,7 @@ const editPost = async (req, res) => {
 
     // Fetch post from DB
     const post = await Post.findById(postId);
-    // console.log("🔍 Found Post:", post);
+    console.log("🔍 Found Post:", post);
 
     if (!post) {
       // console.log(" Post not found in DB");
@@ -168,6 +172,7 @@ const editPost = async (req, res) => {
 
 // Create a Comment
   const createComment = async (req, res) => {
+     const io = req.app.get('io'); 
     try {
       const { text } = req.body;
       const postId = req.params.postId;
@@ -233,16 +238,21 @@ const editPost = async (req, res) => {
       await comment.save();
       await post.save({ validateModifiedOnly: true });
 
+       console.log("Comment to be added to post:", "Comment:", comment.text,  post.commentCount, comment.commentCount); // Log the comment details
 
-      io.to(postId).emit("receive_comment", {
-  post: {
+       console.log("Emitting comment to post room:", postId );
+       
+io.to(postId).emit("receive_comment", {
+  updatedPost: {
     ...post.toObject(),
     comments: post.comments,
   },
   commentCount: post.commentCount,
-  post: postId,
+  postId,
 });
-      // console.log("Comment added to post:", "Comment:", comment.text,  post.commentCount, comment.commentCount); // Log the comment details
+
+
+       console.log("Comment added to post:", "Comment:", comment.text,  post.commentCount, comment.commentCount); // Log the comment details
 
 res.status(201).json({
   message: "Comment added",
@@ -250,7 +260,7 @@ res.status(201).json({
   postId: postId || post._id,
   commentCount: post.commentCount, // 👈 Add this line
 });
-      // console.log("Comment added successfully", comment, post);
+       console.log("Comment added successfully", comment, post);
     } catch (error) {
       logger.error(error);
       console.error("Content Error:", error.message);
@@ -258,6 +268,7 @@ res.status(201).json({
     }
   };
 const getCommentsForPost = async (req, res) => {
+   const io = req.app.get('io'); 
   try {
     const { postId } = req.params;
 
@@ -294,25 +305,31 @@ const getCommentsForPost = async (req, res) => {
 
 // Delete a Post
 const deletePost = async (req, res) => {
+   const io = req.app.get('io'); 
     try {
         const { postId } = req.params;
-        const userId = req.user._id;
+        const userId = req.user._id || req.user.id;
+        console.log("Deleting post with ID:", postId, "by user:", userId );
+        
 
         const post = await Post.findById(postId);
         if (!post) return res.status(404).json({ message: "Post not found" });
 
-        if (post.user.toString() !== userId && req.user.role !== "admin") {
-            return res.status(403).json({ message: "Unauthorized to delete this post" });
-        }
+       const postOwnerId = typeof post.user === "string" ? post.user : post.user._id?.toString();
+
+if (postOwnerId !== userId && req.user.role !== "churchAdmin") {
+    return res.status(403).json({ message: "Unauthorized to delete this post" });
+}
+
 
         // Delete images from Cloudinary
         for (let image of post.images) {
-            await uploadToCloudinary.destroy(image.cld_id);
+            await deleteFromCloudinary(image.cld_id);
         }
 
         // Delete videos from Cloudinary
         for (let video of post.videos) {
-            await uploadVideoToCloudinary.destroy(video.cld_id, { resource_type: "video" });
+            await deleteFromCloudinary(video.cld_id, { resource_type: "video" });
         }
 
         await post.deleteOne();
@@ -324,6 +341,7 @@ const deletePost = async (req, res) => {
 
 // Like/Unlike a Post
 const likePost = async (req, res) => {
+   const io = req.app.get('io'); 
     try {
         const { postId } = req.body;
         const userId = req.user._id;
@@ -347,6 +365,7 @@ const likePost = async (req, res) => {
 
 // Unlike a Post
 const unlikePost = async (req, res) => {
+   const io = req.app.get('io'); 
     try {
         const { postId } = req.body;
         const userId = req.user._id;
@@ -366,6 +385,7 @@ const unlikePost = async (req, res) => {
 
 // React to a Post
 const reactToPost = async (req, res) => {
+   const io = req.app.get('io'); 
     try {
         const { postId, reaction } = req.body;
         const userId = req.user._id;
@@ -388,6 +408,7 @@ const reactToPost = async (req, res) => {
 
 // Get Post by ID
 const getPostById = async (req, res) => {
+   const io = req.app.get('io'); 
     try {
         const { postId } = req.params;
         const post = await Post.findById(postId)
@@ -408,6 +429,7 @@ const getPostById = async (req, res) => {
 }
 // Get User Posts
 const getUserPosts = async (req, res) => {
+   const io = req.app.get('io'); 
   const { userId } = req.params;
 
   if (!userId || userId.trim() === "") {
@@ -428,6 +450,7 @@ const getUserPosts = async (req, res) => {
 
 
 const filterPosts = async (req, res) => {
+   const io = req.app.get('io'); 
     try {
       const { unit, minLikes, maxLikes, startDate, endDate } = req.query;
   

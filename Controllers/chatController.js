@@ -1,5 +1,5 @@
 const mongoose = require("mongoose");
-const AllChats = require("../Models/AllChats"); 
+const Chat = require("../Models/AllChats"); // Import the main Chat model that holds all chat types
 const Message = require("../Models/messages"); // New: Import your new Message model for individual messages
 const {
   PrivateChat,
@@ -32,7 +32,7 @@ const getPrivateChatIdentifier = (participant1Id, participant2Id) => {
 
   const checkPrivateChatExists = async (req, res) => {
     try {
-        const currentUserId = req.user.id; // Assuming req.user.id is correctly populated
+        const currentUserId = req.user._id; // Assuming req.user._id is correctly populated
         const { recipientId } = req.params;
 
         console.log("Backend currentUserId:", currentUserId);
@@ -43,7 +43,7 @@ const getPrivateChatIdentifier = (participant1Id, participant2Id) => {
 
         // 1. Query the generic Chat model first
         // This is the main source of truth for whether a conversation exists
-        const existingGenericChat = await AllChats.findOne({
+        const existingGenericChat = await Chat.findOne({
             chatType: 'private', // Filter for private chats
             participants: { $all: sortedParticipantIds } // Check if both participants are present
         })
@@ -118,7 +118,7 @@ const createPrivateChat = async (req, res) => {
 
     // 2. Try to find the Generic Chat document that links to this private conversation
     // This is the primary chat instance the frontend will use.
-    let existingGenericChat = await AllChats.findOne({
+    let existingGenericChat = await Chat.findOne({
       chatType: 'private',
       // Find where participants array contains BOTH (currentUserId AND recipientId)
       participants: { $all: [currentUserId, recipientId] }
@@ -216,7 +216,7 @@ const createPrivateChat = async (req, res) => {
 
 const getCombinedChatlist = async (req, res) => {
     try {
-        const userId = req.user.id; // User ID from authentication middleware
+        const userId = req.user._id; // User ID from authentication middleware
 
         if (!userId) {
             return res.status(401).json({ message: 'Unauthorized - User ID not found in request' });
@@ -237,7 +237,7 @@ const getCombinedChatlist = async (req, res) => {
             // For now, let's assume `participants` array is used for general too OR you manage it differently.
         }
 
-        const chats = await AllChats.find(query)
+        const chats = await Chat.find(query)
             .populate({
                 path: 'lastMessageSender', // Populate the sender of the last message
                 select: 'userName userImage firstName lastName'
@@ -344,7 +344,7 @@ const sendMessage = async (req, res) => {
     try {
         const { chatType, recipientId: targetId } = req.params;
         const { message = "", reactions = "[]", tempId, replyTo } = req.body;
-        const senderId = req.user.id;
+        const senderId = req.user._id;
         const senderDetails = req.user; // Assuming req.user is already populated by your auth middleware
 
         const allowedTypes = ["private", "unit", "department", "general"];
@@ -423,7 +423,7 @@ const sendMessage = async (req, res) => {
 
                 const sortedParticipantIds = [String(senderId), String(targetId)].sort();
 
-                genericChatDocument = await AllChats.findOne({
+                genericChatDocument = await Chat.findOne({
                     chatType: 'private',
                     participants: { $all: sortedParticipantIds }
                 });
@@ -437,7 +437,7 @@ const sendMessage = async (req, res) => {
                         receiverId: targetId,
                     }).save();
 
-                    genericChatDocument = await new AllChats({
+                    genericChatDocument = await new Chat({
                         chatType: 'private',
                         participants: [senderId, targetId],
                         privateChatRef: newPrivateChatRef._id,
@@ -463,7 +463,7 @@ const sendMessage = async (req, res) => {
                 if (!unit) {
                     return res.status(404).json({ message: "Unit not found." });
                 }
-                genericChatDocument = await AllChats.findOne({ chatType: 'unit', unitChatRef: targetId });
+                genericChatDocument = await Chat.findOne({ chatType: 'unit', unitChatRef: targetId });
                 if (!genericChatDocument) {
                     return res.status(404).json({ message: "Unit chat not found in generic chats." });
                 }
@@ -478,7 +478,7 @@ const sendMessage = async (req, res) => {
                 if (!department) {
                     return res.status(404).json({ message: "Department not found." });
                 }
-                genericChatDocument = await AllChats.findOne({ chatType: 'department', departmentChatRef: targetId });
+                genericChatDocument = await Chat.findOne({ chatType: 'department', departmentChatRef: targetId });
                 if (!genericChatDocument) {
                     return res.status(404).json({ message: "Department chat not found in generic chats." });
                 }
@@ -486,11 +486,11 @@ const sendMessage = async (req, res) => {
                 break;
 
             case "general":
-                genericChatDocument = await AllChats.findOne({ chatType: 'general' });
+                genericChatDocument = await Chat.findOne({ chatType: 'general' });
                 if (!genericChatDocument) {
                     console.warn("General chat document not found. Creating it.");
                     const newGeneralChatRef = await new GeneralChat({ chatId: "general_chat" }).save();
-                    genericChatDocument = await new AllChats({
+                    genericChatDocument = await new Chat({
                         chatType: 'general',
                         participants: [],
                         generalChatRef: newGeneralChatRef._id
@@ -550,7 +550,7 @@ const sendMessage = async (req, res) => {
             .lean(); // Use .lean() for plain JavaScript objects, good for performance for emits
 
         // 3. Update the generic Chat document (last message details and unread counts)
-        const chatBeforeUpdate = await AllChats.findById(genericChatDocument._id).lean();
+        const chatBeforeUpdate = await Chat.findById(genericChatDocument._id).lean();
 
         const updatedUnreadCounts = chatBeforeUpdate.unreadCounts.map(uc => {
             if (uc.user.toString() !== senderId.toString()) {
@@ -559,7 +559,7 @@ const sendMessage = async (req, res) => {
             return uc;
         });
 
-        await AllChats.findByIdAndUpdate(
+        await Chat.findByIdAndUpdate(
             genericChatDocument._id,
             {
                 lastMessageText: savedMessage.messageText || (savedMessage.attachments.length > 0 ? `Attachment (${savedMessage.attachments[0].name})` : (savedMessage.replyTo ? 'Replied to a message' : 'System message')),
@@ -678,7 +678,7 @@ const sendMessage = async (req, res) => {
                                 contextName = populatedNotification.chat.department?.name || 'Department Chat';
                                 break;
                             case 'general':
-                                // This line looks incorrect: populatedNotification.AllChats.generalChatRef?.name
+                                // This line looks incorrect: populatedNotification.Chat.generalChatRef?.name
                                 // It should be populatedNotification.chat.generalChatRef?.name assuming 'chat' is the populated field.
                                 contextName = populatedNotification.chat.generalChatRef?.name || 'General Church Chat';
                                 break;
@@ -746,7 +746,7 @@ const sendMessage = async (req, res) => {
 const getMessages = async (req, res) => {
     try {
         const { chatId } = req.params;
-        const currentUserId = req.user.id;
+        const currentUserId = req.user._id;
         const { beforeId, limit: queryLimit } = req.query;
 
         console.log(`[Backend] getMessages called for generic chatId: ${chatId}`);
@@ -762,7 +762,7 @@ const getMessages = async (req, res) => {
         }
         console.log(`[Backend] Using limit: ${limit}`);
 
-        const chat = await AllChats.findById(chatId);
+        const chat = await Chat.findById(chatId);
         if (!chat || !chat.participants.some(p => p.equals(currentUserId))) {
             return res.status(403).json({ message: "You are not authorized to view messages in this chat." });
         }
@@ -776,7 +776,7 @@ const getMessages = async (req, res) => {
                 },
                 { $addToSet: { readBy: { user: currentUserId, readAt: Date.now() } } }
             ),
-            AllChats.findOneAndUpdate(
+            Chat.findOneAndUpdate(
                 { _id: chatId, 'unreadCounts.user': currentUserId },
                 { $set: { 'unreadCounts.$.count': 0 } },
                 { new: true }
@@ -845,7 +845,7 @@ const getMessages = async (req, res) => {
 const deleteMessage = async (req, res) => {
     try {
         const { messageId } = req.params;
-        const currentUserId = req.user.id; // Assuming req.user.id from authentication
+        const currentUserId = req.user._id; // Assuming req.user._id from authentication
 
         if (!mongoose.Types.ObjectId.isValid(messageId)) {
             return res.status(400).json({ message: "Invalid message ID." });
@@ -876,7 +876,7 @@ const deleteMessage = async (req, res) => {
         console.log(`Message ${messageId} deleted by user ${currentUserId} from chat ${chatId}.`);
 
         // 4. Update the generic Chat document's lastMessage fields if this was the last message
-        const chatDocument = await AllChats.findById(chatId);
+        const chatDocument = await Chat.findById(chatId);
         if (chatDocument && chatDocument.lastMessage && chatDocument.lastMessage.toString() === messageId.toString()) {
             // If the deleted message was the last one, find the new last message
             const newLastMessage = await Message.findOne({ chat: chatId })
@@ -927,7 +927,7 @@ const toggleReaction = async (req, res) => {
         // We only need messageId to find the specific message
         const { messageId } = req.params;
         // userId should come from authentication, not body for security
-        const currentUserId = req.user.id; 
+        const currentUserId = req.user._id; 
         const { reactionType } = req.body;
 
         if (!mongoose.Types.ObjectId.isValid(messageId)) {
@@ -1012,7 +1012,7 @@ const toggleReaction = async (req, res) => {
 
 const getNotifications = async (req, res) => {
     try {
-        const userId = req.user.id; // Use req.user.id for consistency and security
+        const userId = req.user._id; // Use req.user._id for consistency and security
         const { page = 1, limit = 20, readStatus } = req.query; // Added readStatus query param
 
         if (!userId) {

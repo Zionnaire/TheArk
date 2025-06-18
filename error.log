@@ -89,3 +89,11 @@
 {"level":"error","message":"Cannot populate path `privateChats.lastMessage` because it is not in your schema. Set the `strictPopulate` option to false to override.","timestamp":"2025-05-28T00:23:38.759Z"}
 {"level":"error","message":"Post validation failed: content: Path `content` is required.","timestamp":"2025-05-29T20:42:08.549Z"}
 {"level":"error","message":"Post validation failed: content: Path `content` is required.","timestamp":"2025-05-29T20:42:34.344Z"}
+{"level":"error","timestamp":"2025-06-16T21:46:39.533Z"}
+{"level":"error","timestamp":"2025-06-16T22:14:10.158Z"}
+{"level":"error","timestamp":"2025-06-16T22:50:59.038Z"}
+{"level":"error","timestamp":"2025-06-16T22:53:10.017Z"}
+{"level":"error","timestamp":"2025-06-16T22:54:36.845Z"}
+{"level":"error","timestamp":"2025-06-16T22:56:14.227Z"}
+{"level":"error","timestamp":"2025-06-16T22:58:56.443Z"}
+{"level":"error","message":"Post validation failed: content: Path `content` is required.","timestamp":"2025-06-17T10:48:11.904Z"}

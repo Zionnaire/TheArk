@@ -81,10 +81,11 @@ const commentIo = (io) => {
   // };
 
 const replyToComment = async (req, res) => {
+   const io = req.app.get('io'); 
   try {
     const { text } = req.body;
     const { commentId } = req.params;
-    const userId = req.user.id;
+    const userId = req.user._id;
     let imageUrl = null;
     let videoUrl = null;
 
@@ -126,7 +127,13 @@ const replyToComment = async (req, res) => {
 
     // Emit via socket to update the parent comment
     // await reply.populate("user", "firstName lastName userName avatar");
-    io.to(parentComment.post.toString()).emit('receive_reply', reply);
+    await reply.populate("user", "firstName lastName userName avatar");
+
+io.to(parentComment.post.toString()).emit('receive_reply', {
+  commentId: commentId,
+  reply
+});
+
 
     return res.status(201).json({ message: 'Reply added', reply });
 
@@ -139,9 +146,10 @@ const replyToComment = async (req, res) => {
 
 
   const editComment = async (req, res) => {
+     const io = req.app.get('io'); 
     try {
       const { commentId, text } = req.body;
-      const userId = req.user.id;
+      const userId = req.user._id;
 
       const comment = await Comment.findById(commentId);
       if (!comment)
@@ -167,9 +175,10 @@ const replyToComment = async (req, res) => {
   };
 
   const deleteComment = async (req, res) => {
+     const io = req.app.get('io'); 
     try {
       const { commentId } = req.params;
-      const userId = req.user.id;
+      const userId = req.user._id;
 
       const comment = await Comment.findById(commentId);
       if (!comment)
@@ -195,9 +204,10 @@ const replyToComment = async (req, res) => {
   };
 
 const likeComment = async (req, res) => {
+   const io = req.app.get('io'); 
   try {
     const { commentId } = req.params;
-    const userId = req.user.id;
+    const userId = req.user._id;
 
     const comment = await Comment.findById(commentId);
     if (!comment) {
@@ -260,7 +270,7 @@ const likeComment = async (req, res) => {
 if (!postIdStr) {
   console.warn("No valid postId found on updatedComment, skipping socket emit");
 } else {
-  req.io.to(postIdStr).emit("update_comment_like", {
+  io.to(postIdStr).emit("update_comment_like", {
     commentId: updatedComment._id,
     likesCount: updatedComment.likesCount,
     likedByUser,
@@ -282,9 +292,10 @@ if (!postIdStr) {
 
 
   const reactToComment = async (req, res) => {
+     const io = req.app.get('io'); 
     try {
       const { commentId, reaction } = req.body;
-      const userId = req.user.id;
+      const userId = req.user._id;
 
       const comment = await Comment.findById(commentId);
       if (!comment)
@@ -320,6 +331,7 @@ if (!postIdStr) {
   };
 
   const searchComments = async (req, res) => {
+     const io = req.app.get('io'); 
     try {
       const { query } = req.query;
 
@@ -348,6 +360,7 @@ if (!postIdStr) {
   };
 
   const getFilteredComments = async (req, res) => {
+     const io = req.app.get('io'); 
     try {
       const { postId } = req.params;
       const { sort } = req.query; // Expected values: "newest" or "oldest"
@@ -374,6 +387,7 @@ if (!postIdStr) {
   };
 
   const getMostLikedComments = async (req, res) => {
+     const io = req.app.get('io'); 
     try {
       const { postId } = req.params;
 
@@ -397,6 +411,7 @@ if (!postIdStr) {
   };
 
   const getUserComments = async (req, res) => {
+     const io = req.app.get('io'); 
     try {
       const { userId } = req.params;
 
@@ -421,9 +436,10 @@ if (!postIdStr) {
 
 
   const reportComment = async (req, res) => {
+     const io = req.app.get('io'); 
     try {
       const { commentId, reason } = req.body;
-      const userId = req.user.id;
+      const userId = req.user._id;
 
       // Prevent duplicate reports from the same user
       const existingReport = await Report.findOne({
