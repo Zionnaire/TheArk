@@ -147,7 +147,6 @@ const login = async (req, res) => {
     }
 
     // Create JWT tokens using the updated middleware functions
-    // Removed '_id: user._id' as it's redundant; signJwt derives it from the 'user' object.
     const token = signJwt({ user, role: user.role, name: user.firstName });
     // Corrected parameter for signRefreshToken from '_id' to 'id'.
     const refreshToken = signRefreshToken({_id: user._id, role: user.role });
@@ -262,6 +261,37 @@ const getProfile = async (req, res) => {
     res.status(200).json(user);
   } catch (err) {
     console.error("Error fetching profile:", err.message);
+    res.status(500).json({ message: "Server error" });
+  }
+};
+
+const getUserProfile = async (req, res) => {
+  try {
+    const currentUserId = req.user._id;
+    const userId = req.params.id;
+
+    if (!userId) {
+      return res.status(400).json({ message: "User ID is required" });
+    }
+
+    const user = await User.findById(userId)
+      .select("userName firstName lastName userImage followersCount followingCount followers bio")
+      .lean();
+
+    if (!user) {
+      return res.status(404).json({ message: "User not found" });
+    }
+
+    const isFollowing = user.followers.some(
+      followerId => followerId.toString() === currentUserId.toString()
+    );
+
+    res.status(200).json({
+      ...user,
+      isFollowing,
+    });
+  } catch (err) {
+    console.error("Get user profile error:", err);
     res.status(500).json({ message: "Server error" });
   }
 };
@@ -411,7 +441,7 @@ const getAllUsers = async (req, res) => {
 // Get all user chats
 const getAllUserChats = async (req, res) => {
   try {
-    const userId = req.user.id;
+    const userId = req.user._id;
 
     const user = await User.findById(userId).populate("privateChats").populate("unitChats").populate("departmentChats").populate("generalChats");
     //  console.log("User from token:", req.user);
@@ -444,7 +474,7 @@ const getAllUserChats = async (req, res) => {
 const joinChurch = async (req, res) => {
   try {
     const { churchId } = req.body;
-    const userId = req.user.id; 
+    const userId = req.user._id; 
 
     if (!churchId) {
       return res.status(400).json({ message: 'Church ID is required' });
@@ -641,7 +671,7 @@ const deleteUser = async (req, res) => {
       .status(403)
       .json({ message: "Forbidden: Admin privileges required" });
   }
-  if (req.user.id === req.params.id || req.user.role === "admin") {
+  if (req.user._id === req.params.id || req.user.role === "admin") {
     try {
       await User.findByIdAndRemove(req.params.id);
       // Render user inactive
@@ -672,71 +702,82 @@ const deleteUser = async (req, res) => {
 const followUser = async (req, res) => {
   try {
     const currentUserId = req.user._id;
-    const targetUserId = req.params.id;
+    const userId = req.params.id;
+    const churchId = req.churchId
 
-    if (currentUserId === targetUserId) {
+    if (currentUserId === userId) {
       return res.status(400).json({ message: "You can't follow yourself" });
     }
 
     const currentUser = await User.findById(currentUserId);
-    const targetUser = await User.findById(targetUserId);
+    const targetUser = await User.findById(userId);
 
     if (!targetUser) {
       return res.status(404).json({ message: "User to follow not found" });
     }
 
-    if (currentUser.following.includes(targetUserId)) {
-      return res.status(400).json({ message: "Already following this user" });
+    // Check if already following
+    if (currentUser.following.includes(userId || churchId)) {
+      // If already following, return 200 OK and the current user's data
+      // This makes the endpoint 'idempotent' and avoids errors on redundant clicks
+      return res.status(200).json({ message: "Already following this user", user: currentUser.toObject() });
     }
 
-    currentUser.following.push(targetUserId);
+    currentUser.following.push(userId);
     targetUser.followers.push(currentUserId);
 
-    // Optional: Replace these with direct assignments if preferred
     await currentUser.incrementFollowingCount?.();
     await targetUser.incrementFollowersCount?.();
 
-    await currentUser.save();
-    await targetUser.save();
+    await currentUser.save({validateBeforeSave: false});
+    await targetUser.save({validateBeforeSave: false});
 
-    res.status(200).json({ message: "Followed successfully" });
+    // Send back the updated currentUser object
+    res.status(200).json({ message: "Followed successfully", user: currentUser.toObject() });
   } catch (err) {
     console.error("Follow error:", err);
     res.status(500).json({ message: "Internal server error" });
   }
 };
 
-
 const unfollowUser = async (req, res) => {
   try {
     const currentUserId = req.user._id;
-    const targetUserId = req.params.id;
+    const userId = req.params.id;
 
-    if (currentUserId === targetUserId) {
+    if (currentUserId === userId) {
       return res.status(400).json({ message: "You can't unfollow yourself" });
     }
 
     const currentUser = await User.findById(currentUserId);
-    const targetUser = await User.findById(targetUserId);
+    const targetUser = await User.findById(userId);
 
     if (!targetUser) {
       return res.status(404).json({ message: "User not found" });
     }
 
+    const isFollowing = currentUser.following.includes(userId);
+    if (!isFollowing) {
+      // If not following, return 200 OK and the current user's data
+      // This also makes the endpoint 'idempotent'
+      return res.status(200).json({ message: "You're not following this user", user: currentUser.toObject() });
+    }
+
     currentUser.following = currentUser.following.filter(
-      id => id.toString() !== targetUserId
+      id => id.toString() !== userId
     );
     targetUser.followers = targetUser.followers.filter(
       id => id.toString() !== currentUserId
     );
 
-    await currentUser.incrementFollowingCount?.();
-    await targetUser.incrementFollowersCount?.();
+    await currentUser.decrementFollowingCount?.();
+    await targetUser.decrementFollowersCount?.();
 
-    await currentUser.save();
-    await targetUser.save();
+    await currentUser.save({validateBeforeSave: false});
+    await targetUser.save({validateBeforeSave: false});
 
-    res.status(200).json({ message: "Unfollowed successfully" });
+    // Send back the updated currentUser object
+    res.status(200).json({ message: "Unfollowed successfully", user: currentUser.toObject() });
   } catch (err) {
     console.error("Unfollow error:", err);
     res.status(500).json({ message: "Internal server error" });
@@ -744,6 +785,29 @@ const unfollowUser = async (req, res) => {
 };
 
 
+const getFollowStatus = async (req, res) => {
+  try {
+    const currentUserId = req.user._id;
+    const viewedUserId = req.params.id;
+
+    if (!viewedUserId) {
+      return res.status(400).json({ message: "Target user ID is required" });
+    }
+
+    const currentUser = await User.findById(currentUserId);
+
+    if (!currentUser) {
+      return res.status(404).json({ message: "Current user not found" });
+    }
+
+    const isFollowing = currentUser.following.includes(viewedUserId);
+
+    return res.status(200).json({ isFollowing });
+  } catch (err) {
+    console.error("Error checking follow status:", err);
+    return res.status(500).json({ message: "Internal server error" });
+  }
+};
 
 // Fetch followers
 const getFollowers = async (req, res) => {
@@ -754,7 +818,29 @@ const getFollowers = async (req, res) => {
 const getFollowing = async (req, res) => {
   await getUserConnections(req, res, "following");
 };
+const getFollowCounts = async (req, res) => {
+  try {
+    const userId = req.params.userId;
+    const currentUserId = req.user._id;
 
+    const user = await User.findById(userId).select('followersCount followingCount followers');
+
+    if (!user) {
+      return res.status(404).json({ message: 'User not found' });
+    }
+
+    const isFollowing = user.followers.includes(currentUserId);
+
+    res.status(200).json({
+      followers: user.followersCount,
+      following: user.followingCount,
+      isFollowing,
+    });
+  } catch (err) {
+    console.error('getFollowCounts error:', err);
+    res.status(500).json({ message: 'Internal server error' });
+  }
+};
 
 module.exports = {
   register,
@@ -775,6 +861,9 @@ module.exports = {
   getFollowing,
   followUser,
   unfollowUser,
+  getUserProfile,
+  getFollowCounts,
+  getFollowStatus
 };
 
 

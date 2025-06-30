@@ -19,4 +19,6 @@ postRouter.get("/filter", postIo.filterPosts);
 postRouter.get("/:postId/comments", postIo.getCommentsForPost);
 postRouter.post("/:postId/comments", verifyToken, postIo.createComment);
 postRouter.get("/user/:userId", postIo.getUserPosts)
+postRouter.post("/:postId/share/chat", verifyToken, postIo.sharePostToChat)
+postRouter.post("/:postId/share/page", verifyToken, postIo.sharePostToPage)
 module.exports = postRouter;

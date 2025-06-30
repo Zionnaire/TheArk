@@ -36,6 +36,17 @@ const postSchema = new mongoose.Schema(
         user: { type: mongoose.Schema.Types.ObjectId, ref: "User" },
       },
     ],
+
+    type: {
+    type: String,
+    enum: ["original", "shared"],
+    default: "original",
+  },
+sharedBy: [
+  { type: mongoose.Schema.Types.ObjectId, 
+    ref: 'User' 
+
+  }],
     reactions: [
       {
         user: { type: mongoose.Schema.Types.ObjectId, ref: "User" },
@@ -71,6 +82,23 @@ const postSchema = new mongoose.Schema(
       enum: ["public", "private", "friends"],
       default: "public",
     },
+    sharedFrom: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "Post",
+      required: false,
+    },
+    sharedTo: {
+      type: String,
+      enum: ["page", "chat"],
+      required: false,
+    },
+
+    quote: {
+  type: String,
+  trim: true,
+  default: "",
+},
+
     isDeleted: {
       type: Boolean,
       default: false,

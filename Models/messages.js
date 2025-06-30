@@ -56,6 +56,11 @@ const messageSchema = new mongoose.Schema({
         type: mongoose.Schema.Types.ObjectId,
         ref: 'Message',
     },
+
+    post: {
+        type: mongoose.Schema.Types.ObjectId,
+        ref: 'Post'
+    },
 }, { timestamps: true }); // Mongoose will add `createdAt` and `updatedAt`
 
 // Indexes for common queries

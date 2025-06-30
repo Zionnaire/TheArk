@@ -57,8 +57,8 @@ const signJwt = ({ user = null, church = null, role }) => {
 const verifyToken = async (req, res, next) => {
   try {
     const Header = req.headers.authorization;
-    console.log(`[verifyToken Middleware] Request Path: ${req.path}, Method: ${req.method}`); // Added path/method logging
-    console.log("[verifyToken Middleware] Incoming Authorization Header:", Header); // Debug log
+    // console.log(`[verifyToken Middleware] Request Path: ${req.path}, Method: ${req.method}`); // Added path/method logging
+    // console.log("[verifyToken Middleware] Incoming Authorization Header:", Header); // Debug log
 
     if (!Header || !Header.toLowerCase().startsWith("bearer ")) {
       console.warn("[verifyToken Middleware] Missing or malformed Authorization header.", { Header }); // More detailed warning
@@ -78,7 +78,7 @@ const verifyToken = async (req, res, next) => {
     }
 
     const decoded = jwt.verify(token, process.env.JWT_SECRET);
-    console.log("[verifyToken Middleware] Token successfully decoded:", decoded); // Keep this debug log
+    // console.log("[verifyToken Middleware] Token successfully decoded:", decoded); // Keep this debug log
 
     // Extract primary ID and role from decoded token payload
     const { id, role, userId, churchId } = decoded;
@@ -165,7 +165,7 @@ const verifyToken = async (req, res, next) => {
       privateChatIds: populatedEntity.privateChats ? populatedEntity.privateChats.map(chat => chat._id.toString()) : [],
     };
 
-    console.log("[verifyToken Middleware] req.user populated successfully:", req.user); // Debug log
+    // console.log("[verifyToken Middleware] req.user populated successfully:", req.user); // Debug log
 
     next(); // Proceed to the next middleware or controller
   } catch (error) {

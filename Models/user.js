@@ -238,4 +238,13 @@ userSchema.methods.incrementFollowingCount = async function () {
   await this.save({ validateBeforeSave: false });
 };
 
+userSchema.methods.decrementFollowersCount = async function () {
+  this.followersCount = this.followers.length;
+  await this.save({validateBeforeSave: false});
+}
+
+userSchema.methods.decrementFollowingCount = async function () {
+  this.followingCount = this.following.length;
+  await this.save({validateBeforeSave: false});
+}
 module.exports = mongoose.model('User', userSchema);

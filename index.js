@@ -8,11 +8,12 @@ const mongoose = require("mongoose");
 const bodyParser = require("body-parser");
 
 // Assuming your models are correctly path'd
-const Message = require("./Models/messages");
+const Message = require("./Models/messages"); // This is for messages, NOT posts
+const Post = require("./Models/post"); // This IS your Post model, as clarified
 const AllChats = require("./Models/AllChats");
-const User = require("./Models/user"); // Assuming User model for markMessageAsRead
-const Notification = require("./Models/notification"); // Assuming Notification model for notifications
-const Chat = require("./Models/chat"); // Assuming Chat model for chat-related operations
+const User = require("./Models/user");
+const Notification = require("./Models/notification");
+const Chat = require("./Models/chat");
 
 // Initialize Express app
 const app = express();
@@ -23,16 +24,22 @@ const connectDB = require("./configs/database");
 // --- IMPORTANT: INITIALIZE HTTP SERVER AND SOCKET.IO SERVER ONCE AND CORRECTLY ---
 const server = http.createServer(app);
 const io = new Server(server, {
-    cors: {
-        origin: "*", // Adjust this to your frontend URL in production for security
-        methods: ["GET", "POST", "PUT", "DELETE", "HEAD", "OPTIONS", "PATCH"],
-    },
+  cors: {
+    origin: "*", // Adjust this to your frontend URL in production for security
+    methods: ["GET", "POST", "PUT", "DELETE", "HEAD", "OPTIONS", "PATCH"],
+  },
 });
 
 // Store `io` instance on the Express app
 // This makes the 'io' instance accessible in your route handlers via `req.app.get('io')`
-app.set('io', io);
+app.set("io", io);
 console.log("Socket.io instance attached to Express app.");
+
+// --- CORRECTED: Attach your Mongoose Models to the Express app ---
+// This makes these models accessible in your route handlers/controllers via `req.app.get('ModelName')`
+app.set("Notification", Notification);
+app.set("User", User);
+app.set("Post", Post); // <--- CORRECTED: Using 'Post' as the key and the actual Post model
 
 // Define the global userSocketMap for Socket.io
 io.userSocketMap = new Map(); // Map<userId: string, Set<socketId: string>>
@@ -41,15 +48,19 @@ io.userSocketMap = new Map(); // Map<userId: string, Set<socketId: string>>
 app.use(cors()); // CORS first
 app.use(express.json()); // For application/json requests
 app.use(express.urlencoded({ extended: true })); // For application/x-www-form-urlencoded requests
-app.use(fileUpload({
+app.use(
+  fileUpload({
     limits: { fileSize: 50 * 1024 * 1024 },
     createParentPath: true,
-    debug: true
-}));
+    debug: true,
+  })
+);
 // Removed bodyParser.json() and bodyParser.urlencoded() as express.json() and express.urlencoded() handle most cases
-app.use(bodyParser.json({
-    limit: '50mb', // Adjust as needed
-}));
+app.use(
+  bodyParser.json({
+    limit: "50mb", // Adjust as needed
+  })
+);
 // Routes (require them after app and io are set up)
 const roleRouter = require("./Routes/role");
 const userRouter = require("./Routes/user");
@@ -64,7 +75,7 @@ const churchRouter = require("./Routes/church");
 const resendVerificationRouter = require("./Routes/resendVerification");
 const verifyRegisterRouter = require("./Routes/verifyRegister");
 const chatGroupRouter = require("./Routes/chatGroup");
-const unitRouter = require('./Routes/unit');
+const unitRouter = require("./Routes/unit");
 const commentRouter = require("./Routes/comment");
 const refreshRouter = require("./Routes/refreshToken");
 const validationRouter = require("./Routes/validation");
@@ -72,172 +83,203 @@ const notificationRouter = require("./Routes/notification");
 
 // --- Socket.io Connection Logic ---
 io.on("connection", (socket) => {
-    console.log(`User connected: ${socket.id}`);
+  console.log(`User connected: ${socket.id}`); // Frontend should emit 'authenticate'
 
-    // Frontend should emit 'authenticate'
-    socket.on('authenticate', (userId) => { // Changed from 'authentication' to 'authenticate'
-        if (userId) {
-            socket.userId = userId;
-            if (!io.userSocketMap.has(userId)) {
-                io.userSocketMap.set(userId, new Set());
-            }
-            io.userSocketMap.get(userId).add(socket.id);
-            console.log(`User ${userId} registered with socket ${socket.id}. Total sockets for user: ${io.userSocketMap.get(userId).size}`);
-            socket.join(userId); // Join user's personal room for direct notifications
-            console.log(`Socket ${socket.id} joined personal room: ${userId}`);
-        } else {
-            console.warn(`Attempted to register user with undefined userId for socket: ${socket.id}`);
-            socket.disconnect(true);
-        }
-        console.log("Current userSocketMap:", [...io.userSocketMap.entries()]);
-    });
+  socket.on("authenticate", (userId) => {
+    if (userId) {
+      socket.userId = userId;
+      if (!io.userSocketMap.has(userId)) {
+        io.userSocketMap.set(userId, new Set());
+      }
+      io.userSocketMap.get(userId).add(socket.id);
+      console.log(
+        `User ${userId} registered with socket ${
+          socket.id
+        }. Total sockets for user: ${io.userSocketMap.get(userId).size}`
+      );
+      socket.join(userId); // Join user's personal room for direct notifications
+      console.log(`Socket ${socket.id} joined personal room: ${userId}`);
+    } else {
+      console.warn(
+        `Attempted to register user with undefined userId for socket: ${socket.id}`
+      );
+      socket.disconnect(true);
+    }
+    console.log("Current userSocketMap:", [...io.userSocketMap.entries()]);
+  }); // Frontend should emit 'joinRoom'
 
-    // Frontend should emit 'joinRoom'
-    socket.on("joinRoom", (chatId) => {
-        if (chatId) {
-            socket.join(chatId);
-            console.log(`Socket ${socket.id} joined chat room: ${chatId}. Room size: ${io.sockets.adapter.rooms.get(chatId)?.size || 0}`);
-        } else {
-            console.warn(`Attempted to join undefined chatId for socket ${socket.id}`);
-        }
-    });
+  socket.on("joinRoom", (chatId) => {
+    if (chatId) {
+      socket.join(chatId);
+      console.log(
+        `Socket ${socket.id} joined chat room: ${chatId}. Room size: ${
+          io.sockets.adapter.rooms.get(chatId)?.size || 0
+        }`
+      );
+    } else {
+      console.warn(
+        `Attempted to join undefined chatId for socket ${socket.id}`
+      );
+    }
+  }); // Frontend should emit 'leaveRoom'
 
-    // Frontend should emit 'leaveRoom'
-    socket.on("leaveRoom", (chatId) => {
-        if (chatId) {
-            socket.leave(chatId);
-            console.log(`Socket ${socket.id} left chat room: ${chatId}. Room size: ${io.sockets.adapter.rooms.get(chatId)?.size || 0}`);
-        } else {
-            console.warn(`Attempted to leave undefined chatId for socket: ${socket.id}`);
-        }
-    });
+  socket.on("leaveRoom", (chatId) => {
+    if (chatId) {
+      socket.leave(chatId);
+      console.log(
+        `Socket ${socket.id} left chat room: ${chatId}. Room size: ${
+          io.sockets.adapter.rooms.get(chatId)?.size || 0
+        }`
+      );
+    } else {
+      console.warn(
+        `Attempted to leave undefined chatId for socket: ${socket.id}`
+      );
+    }
+  }); // Frontend should emit 'typing'
 
-    // Frontend should emit 'typing'
-    socket.on("typing", ({ chatId, userId, isTyping }) => { // Changed from 'sendTyping' to 'typing'
-        socket.to(chatId).emit('userTyping', { userId, chatId, isTyping });
-        console.log(`User ${userId} isTyping=${isTyping} in chat ${chatId}`);
-    });
+  socket.on("typing", ({ chatId, userId, isTyping }) => {
+    socket.to(chatId).emit("userTyping", { userId, chatId, isTyping });
+    console.log(`User ${userId} isTyping=${isTyping} in chat ${chatId}`);
+  }); // Frontend should emit 'markAsRead'
 
-    // Frontend should emit 'markAsRead'
-    socket.on('markAsRead', async ({ messageId, readerId, chatId }) => { // Changed from 'markMessageAsRead' to 'markAsRead'
-        try {
-            if (!readerId) {
-                console.warn(`Backend: Socket ${socket.id} attempted to mark message as read without readerId.`);
-                return socket.emit('error', 'Authentication required to mark messages as read.');
-            }
-            if (!messageId || !chatId) {
-                console.warn(`Backend: Missing messageId or chatId for markAsRead from socket ${socket.id}.`);
-                return socket.emit('error', 'Invalid request for marking message as read.');
-            }
+  socket.on("markAsRead", async ({ messageId, readerId, chatId }) => {
+    try {
+      if (!readerId) {
+        console.warn(
+          `Backend: Socket ${socket.id} attempted to mark message as read without readerId.`
+        );
+        return socket.emit(
+          "error",
+          "Authentication required to mark messages as read."
+        );
+      }
+      if (!messageId || !chatId) {
+        console.warn(
+          `Backend: Missing messageId or chatId for markAsRead from socket ${socket.id}.`
+        );
+        return socket.emit(
+          "error",
+          "Invalid request for marking message as read."
+        );
+      } // Ensure you have your Mongoose models (Message, AllChats) imported and available here
 
-            // Ensure you have your Mongoose models (Message, AllChats) imported and available here
-             const updatedMessage = await Message.findByIdAndUpdate(
-                messageId,
-                { $addToSet: { readBy: { user: readerId } } }, // Add readerId to readBy array if not already present
-                { new: true, useFindAndModify: false } // Return the updated document
+      const updatedMessage = await Message.findByIdAndUpdate(
+        messageId,
+        { $addToSet: { readBy: { user: readerId } } },
+        { new: true, useFindAndModify: false }
+      );
+      if (!updatedMessage) {
+        console.warn(
+          `Backend: Message ${messageId} not found for marking as read.`
+        );
+        return socket.emit("error", "Message not found.");
+      }
 
-             );
-            if (!updatedMessage) {
-                console.warn(`Backend: Message ${messageId} not found for marking as read.`);
-                return socket.emit('error', 'Message not found.');
-            }
+      await AllChats.findOneAndUpdate(
+        { _id: chatId, "messages._id": messageId },
+        { $addToSet: { "messages.$.readBy": { user: readerId } } },
+        { new: true, useFindAndModify: false }
+      );
 
-
-             await AllChats.findOneAndUpdate( 
-                { _id: chatId, 'messages._id': messageId },
-                { $addToSet: { 'messages.$.readBy': { user: readerId } } }, // Add readerId to readBy array in the specific message
-                { new: true, useFindAndModify: false } // Return the updated document
-
-             );
-
-            if (updatedMessage) {
-                // Your database update logic for unread counts would go here
-                console.log(`Backend: Message ${messageId} in chat ${chatId} marked as read by ${readerId}. Emitting 'messageRead'.`);
-                io.to(chatId).emit('messageRead', {
-                    messageId: updatedMessage._id.toString(),
-                    chatId: updatedMessage.chat._id.toString(),
-                    readerId: readerId,
-                    readBy: updatedMessage.readBy.map(entry => entry.user.toString())
-                });
-            } else {
-                console.warn(`Backend: Message ${messageId} not found to mark as read.`);
-            }
-        } catch (error) {
-            console.error('Backend: Error marking message as read:', error);
-            socket.emit('error', 'Failed to mark message as read.');
-        }
-    });
-
-    // --- NEW: Server-side emits for Reaction Updates and Notifications ---
-
-    socket.on('addMessageReaction', async (data) => {
-        // ... database logic to add reaction ...
-        const { messageId, chatId, reactorId, reactionType, updatedReactions } = data;
-        io.to(chatId).emit('messageReactionUpdated', {
-            messageId,
-            chatId,
-            reactions: updatedReactions, // Array of { user, type }
-            reactionAction: 'added',
-            reactorId,
-            reactionType,
+      if (updatedMessage) {
+        console.log(
+          `Backend: Message ${messageId} in chat ${chatId} marked as read by ${readerId}. Emitting 'messageRead'.`
+        );
+        // Note: updatedMessage.chat._id might be undefined if not populated.
+        // Consider how chat ID is reliably retrieved from updatedMessage or passed in payload.
+        io.to(chatId).emit("messageRead", {
+          // Emitting to chatId directly as it's passed in payload
+          messageId: updatedMessage._id.toString(),
+          chatId: chatId, // Use the chatId from the payload directly
+          readerId: readerId,
+          readBy: updatedMessage.readBy.map((entry) => entry.user.toString()),
         });
-    });
+      } else {
+        console.warn(
+          `Backend: Message ${messageId} not found to mark as read.`
+        );
+      }
+    } catch (error) {
+      console.error("Backend: Error marking message as read:", error);
+      socket.emit("error", "Failed to mark message as read.");
+    }
+  }); // --- NEW: Server-side emits for Reaction Updates and Notifications ---
 
-    socket.on('removeMessageReaction', async (data) => {
-        // ... database logic to remove reaction ...
-        const { messageId, chatId, reactorId, reactionType, updatedReactions } = data;
-        io.to(chatId).emit('messageReactionUpdated', {
-            messageId,
-            chatId,
-            reactions: updatedReactions, // Array of { user, type }
-            reactionAction: 'removed',
-            reactorId,
-            reactionType,
-        });
+  socket.on("addMessageReaction", async (data) => {
+    // ... database logic to add reaction ...
+    const { messageId, chatId, reactorId, reactionType, updatedReactions } =
+      data;
+    io.to(chatId).emit("messageReactionUpdated", {
+      messageId,
+      chatId,
+      reactions: updatedReactions, // Array of { user, type }
+      reactionAction: "added",
+      reactorId,
+      reactionType,
     });
+  });
 
-    // For example, when a new notification is generated:
-    socket.on('generateNotification', async (notificationData) => {
-        // ... database logic to save notification ...
-        // Ensure notificationData matches the NotificationEventData interface
-        io.to(notificationData.recipientId).emit('newNotification', notificationData);
+  socket.on("removeMessageReaction", async (data) => {
+    // ... database logic to remove reaction ...
+    const { messageId, chatId, reactorId, reactionType, updatedReactions } =
+      data;
+    io.to(chatId).emit("messageReactionUpdated", {
+      messageId,
+      chatId,
+      reactions: updatedReactions, // Array of { user, type }
+      reactionAction: "removed",
+      reactorId,
+      reactionType,
     });
+  }); // For example, when a new notification is generated:
 
-    socket.on("receive_comment", (data) => {
-        const { postId, comment } = data;
-        console.log(`Comment received for post ${postId}:`, comment);
-        // Emit the comment to the post's room
-        io.to(postId).emit("receive_comment", { postId, comment });
+  socket.on("generateNotification", async (notificationData) => {
+    // ... database logic to save notification ...
+    // Ensure notificationData matches the NotificationEventData interface
+    io.to(notificationData.recipientId).emit(
+      "newNotification",
+      notificationData
+    );
+  });
+
+  socket.on("receive_comment", (data) => {
+    const { postId, comment } = data;
+    console.log(`Comment received for post ${postId}:`, comment); // Emit the comment to the post's room
+    io.to(postId).emit("receive_comment", { postId, comment });
+  });
+
+  socket.on("receive_reply", (data) => {
+    const { commentId, reply } = data;
+    console.log(`Reply received for comment ${commentId}:`, reply); // Emit the reply to the comment's room
+    io.to(commentId).emit("receive_reply", { commentId, reply });
+  });
+
+  socket.on("update_comment_like", (data) => {
+    const { commentId, likedByUser, likesCount } = data;
+    console.log(`Likes updated for comment ${commentId}:`, likedByUser); // Emit the updated likes to the comment's room
+    io.to(commentId).emit("update_comment_like", {
+      commentId,
+      likesCount,
+      likedByUser,
     });
+  });
 
-    socket.on("receive_reply", (data) => {
-        const { commentId, reply } = data;
-        console.log(`Reply received for comment ${commentId}:`, reply);
-        // Emit the reply to the comment's room
-        io.to(commentId).emit("receive_reply", { commentId, reply });   
-    });
-
-    socket.on("update_comment_like", (data) => {
-        const { commentId, likedByUser, likesCount } = data;
-        console.log(`Likes updated for comment ${commentId}:`, likedByUser);
-        // Emit the updated likes to the comment's room
-        io.to(commentId).emit("update_comment_like", { commentId, likesCount, likedByUser });
-    });
-
-    
-    
-
-    socket.on("disconnect", () => {
-        console.log(`User disconnected: ${socket.id}`);
-        if (socket.userId && io.userSocketMap.has(socket.userId)) {
-            io.userSocketMap.get(socket.userId).delete(socket.id);
-            if (io.userSocketMap.get(socket.userId).size === 0) {
-                io.userSocketMap.delete(socket.userId);
-                console.log(`User ${socket.userId} removed from map (all sockets disconnected).`);
-            }
-            console.log(`User ${socket.userId} removed socket ${socket.id} from map.`);
-        }
-    });
+  socket.on("disconnect", () => {
+    console.log(`User disconnected: ${socket.id}`);
+    if (socket.userId && io.userSocketMap.has(socket.userId)) {
+      io.userSocketMap.get(socket.userId).delete(socket.id);
+      if (io.userSocketMap.get(socket.userId).size === 0) {
+        io.userSocketMap.delete(socket.userId);
+        console.log(
+          `User ${socket.userId} removed from map (all sockets disconnected).`
+        );
+      }
+      console.log(
+        `User ${socket.userId} removed socket ${socket.id} from map.`
+      );
+    }
+  });
 });
 // --- END Socket.io Connection Logic ---
 
@@ -267,6 +309,6 @@ app.use("/api/v1/notifications", notificationRouter);
 
 // Start the server
 const port = process.env.PORT || 5000;
-server.listen(port, '0.0.0.0', () => {
-    console.log(`Server is running on port ${port}`);
+server.listen(port, "0.0.0.0", () => {
+  console.log(`Server is running on port ${port}`);
 });

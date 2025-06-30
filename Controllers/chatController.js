@@ -537,7 +537,7 @@ const sendMessage = async (req, res) => {
         });
 
         const savedMessage = await newMessage.save();
-        console.log("Message saved to database with _id:", savedMessage._id);
+        // console.log("Message saved to database with _id:", savedMessage._id);
 
         // --- CRITICAL CHANGE: POPULATE THE SENDER ON THE SAVED MESSAGE ---
         const populatedSavedMessage = await Message.findById(savedMessage._id)
@@ -569,7 +569,7 @@ const sendMessage = async (req, res) => {
             },
             { new: true }
         );
-        console.log("Generic Chat document updated with last message and unread counts.");
+        // console.log("Generic Chat document updated with last message and unread counts.");
 
         // 4. Send real-time updates via Socket.io
         const io = req.app.get('io');
@@ -595,7 +595,7 @@ const sendMessage = async (req, res) => {
                 for (const socketId of roomSockets) {
                     if (!senderTargetSockets.has(socketId)) {
                         io.to(socketId).emit('receiveMessage', messageToEmit);
-                        console.log(`[ChatController] Emitted 'receiveMessage' to socket ${socketId} in room ${chatRoomId}`);
+                        // console.log(`[ChatController] Emitted 'receiveMessage' to socket ${socketId} in room ${chatRoomId}`);
                     }
                 }
             } else {
@@ -612,7 +612,7 @@ const sendMessage = async (req, res) => {
 
             if (senderTargetSockets.size > 0) {
                 io.to([...senderTargetSockets]).emit('messageSentConfirmation', confirmedMessageToSender);
-                console.log(`[ChatController] Emitted 'messageSentConfirmation' to sender's sockets for tempId: ${tempId}`);
+                // console.log(`[ChatController] Emitted 'messageSentConfirmation' to sender's sockets for tempId: ${tempId}`);
             } else {
                 console.warn(`[ChatController] No active sockets found for sender ${senderId} for 'messageSentConfirmation'.`);
             }
@@ -645,7 +645,7 @@ const sendMessage = async (req, res) => {
                         read: false,
                     });
                     await newNotification.save();
-                    console.log(`Notification created for user ${participantId} for message ${savedMessage._id}`);
+                    // console.log(`Notification created for user ${participantId} for message ${savedMessage._id}`);
 
                     const populatedNotification = await Notification.findById(newNotification._id)
                         .populate('sender', 'userName firstName lastName userImage')
@@ -706,16 +706,16 @@ const sendMessage = async (req, res) => {
                             image: contextImage,
                         } : null,
                     };
-                    console.log("userSocketMap snapshot:", [...io.userSocketMap.entries()]);
+                    // console.log("userSocketMap snapshot:", [...io.userSocketMap.entries()]);
 
                     if (io.userSocketMap.has(participantId.toString())) {
                         io.to(participantId.toString()).emit('newNotification', formattedNotification);
-                        console.log(`Real-time 'newNotification' sent to user ${participantId}.`);
+                        // console.log(`Real-time 'newNotification' sent to user ${participantId}.`);
                     } else {
-                        console.log(`User ${participantId} is offline. Notification saved to DB.`);
+                        // console.log(`User ${participantId} is offline. Notification saved to DB.`);
                     }
                 } else {
-                    console.log(`User ${participantId} is in chat room ${chatRoomId}. No notification sent.`);
+                    // console.log(`User ${participantId} is in chat room ${chatRoomId}. No notification sent.`);
                 }
             }
         } else {
@@ -742,31 +742,32 @@ const sendMessage = async (req, res) => {
     }
 };
 
-
 const getMessages = async (req, res) => {
     try {
         const { chatId } = req.params;
         const currentUserId = req.user._id;
         const { beforeId, limit: queryLimit } = req.query;
 
-        console.log(`[Backend] getMessages called for generic chatId: ${chatId}`);
-        console.log(`[Backend] Query params: { beforeId: ${beforeId}, limit: ${queryLimit} }`);
+        // console.log(`[Backend] getMessages called for chatId: ${chatId}`);
+        // console.log(`[Backend] Query params: { beforeId: ${beforeId}, limit: ${queryLimit} }`);
 
         if (!mongoose.Types.ObjectId.isValid(chatId)) {
             return res.status(400).json({ message: "Invalid chat ID format (must be a valid ObjectId)." });
         }
 
-        const limit = parseInt(queryLimit || '20', 10);
+        const MAX_LIMIT = 50;
+        const limit = Math.min(parseInt(queryLimit || '20', 10), MAX_LIMIT);
+
         if (isNaN(limit) || limit <= 0) {
             return res.status(400).json({ message: "Invalid limit provided." });
         }
-        console.log(`[Backend] Using limit: ${limit}`);
 
         const chat = await Chat.findById(chatId);
         if (!chat || !chat.participants.some(p => p.equals(currentUserId))) {
             return res.status(403).json({ message: "You are not authorized to view messages in this chat." });
         }
 
+        // Mark all received messages as read & reset unread count
         await Promise.all([
             Message.updateMany(
                 {
@@ -782,22 +783,22 @@ const getMessages = async (req, res) => {
                 { new: true }
             )
         ]);
-        console.log(`[Backend] Marked relevant messages as read and reset unread count for user ${currentUserId} in chat ${chatId}`);
 
+        // Build message filter
         let filter = { chat: chatId };
         if (beforeId && mongoose.Types.ObjectId.isValid(beforeId)) {
             filter._id = { $lt: new mongoose.Types.ObjectId(beforeId) };
-            console.log(`[Backend] Using _id filter: ${JSON.stringify(filter._id)}`);
-        } else if (beforeId) { // Log invalid beforeId
+            // console.log(`[Backend] Using _id filter: ${JSON.stringify(filter._id)}`);
+        } else if (beforeId) {
             console.warn(`[Backend] Invalid beforeId received: ${beforeId}. Skipping _id filter.`);
         } else {
-            console.log(`[Backend] No beforeId provided. Fetching initial/latest messages.`);
+            // console.log(`[Backend] No beforeId provided. Fetching latest messages.`);
         }
 
-        // Fetch one more message than the limit to determine if there are more
+        // Fetch messages + 1 extra to determine `hasMore`
         const fetchedMessages = await Message.find(filter)
-            .sort({ createdAt: -1 }) // Sort by creation date, newest first
-            .limit(limit + 1) // Fetch one extra message
+            .sort({ createdAt: -1 })
+            .limit(limit + 1)
             .populate("sender", "userName firstName lastName userImage")
             .populate({
                 path: 'reactions.user',
@@ -807,24 +808,18 @@ const getMessages = async (req, res) => {
                 path: 'replyTo',
                 select: 'messageText sender',
                 populate: { path: 'sender', select: 'userName' }
-            });
+            })
+            .populate({
+                path: 'post',
+                populate: {
+                    path: 'user',
+                    select: 'userName firstName lastName userImage'
+                }
+            })
+            .lean(); // Performance boost for read-only queries
 
-        // Determine hasMore based on the fetchedMessages count
         const hasMore = fetchedMessages.length > limit;
-
-        // Slice the array to return only the requested limit of messages
-        const messagesToReturn = fetchedMessages.slice(0, limit);
-
-        console.log(`[Backend] Fetched ${fetchedMessages.length} messages (including potential extra for hasMore).`);
-        console.log(`[Backend] Returning ${messagesToReturn.length} messages.`);
-        if (messagesToReturn.length > 0) {
-            console.log(`[Backend] Oldest returned message _id (before reverse): ${messagesToReturn[messagesToReturn.length - 1]?._id}`);
-            console.log(`[Backend] Newest returned message _id (before reverse): ${messagesToReturn[0]?._id}`);
-        }
-
-        messagesToReturn.reverse(); // Reverse to get oldest first for UI (e.g., FlatList with inverted prop)
-
-        console.log(`[Backend] hasMore: ${hasMore}`);
+        const messagesToReturn = fetchedMessages.slice(0, limit).reverse(); // Return oldest first
 
         return res.status(200).json({
             success: true,
@@ -1130,13 +1125,7 @@ const getNotifications = async (req, res) => {
 };
 //_________________________________________________________________________________
 
-
-
   // GET /api/v1/private/:recipientId/exists
-
-
-
-
 
 
   const getUnitChatList = async (req, res) => {

@@ -7,10 +7,19 @@ const unitSchema = new mongoose.Schema({
     unique: true,
     trim: true,
   },
+  unitLogo: {
+  url: { type: String },
+  cld_id: { type: String }
+},
+  church: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: "Church",
+    // required: true, // 🔥 makes it non-floating
+  },
   unitHead: {
     type: mongoose.Schema.Types.ObjectId,
     ref: "User",
-    required: true,
+    default: null,
   },
   description: {
     type: String,
@@ -20,39 +29,13 @@ const unitSchema = new mongoose.Schema({
     type: Boolean,
     default: true,
   },
-  departments: [
-    {
-      _id: {
-        type: mongoose.Schema.Types.ObjectId,
-        ref: "Department",
-      },
-      name: String,
-    },
-  ],
-  chatGroups: [
-    {
-      _id: {
-        type: mongoose.Schema.Types.ObjectId,
-        ref: "ChatGroup",
-      },
-      name: String,
-    },
-  ],
-  members: [
-    {
-      userId: {
-        type: mongoose.Schema.Types.ObjectId,
-        ref: "User",
-      },
-      name: String,
-    },
-  ],
+ departments: [{ type: mongoose.Schema.Types.ObjectId, ref: "Department" }],
+chatGroups: [{ type: mongoose.Schema.Types.ObjectId, ref: "ChatGroup" }],
+members: [{ type: mongoose.Schema.Types.ObjectId, ref: "User" }],
+
   pendingRequests: [
     {
-      userId: {
-        type: mongoose.Schema.Types.ObjectId,
-        ref: "User",
-      },
+      userId: { type: mongoose.Schema.Types.ObjectId, ref: "User" },
       name: String,
     },
   ],
@@ -60,11 +43,6 @@ const unitSchema = new mongoose.Schema({
     type: Number,
     default: 0,
   },
-  totalUnits: {
-    type: Number,
-    default: 0,
-  },
 }, { timestamps: true });
 
-const Unit = mongoose.model("Unit", unitSchema);
-module.exports = Unit;
+module.exports = mongoose.model("Unit", unitSchema);

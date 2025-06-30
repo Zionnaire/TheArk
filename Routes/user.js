@@ -17,7 +17,10 @@ const {
     getFollowers,
     getFollowing,
     followUser,
-    unfollowUser
+    unfollowUser,
+    getUserProfile,
+    getFollowStatus,
+    getFollowCounts
 } = require("../Controllers/userController");
 const upload = require("../Middlewares/upload");
 // const { authenticateToken } = require("../Middlewares/authAccess");
@@ -68,6 +71,8 @@ userRouter.put("/:id/follow", verifyToken, followUser);
 // Unfollow a user
 userRouter.put("/:id/unfollow", verifyToken, unfollowUser);
 
+userRouter.get("/profile/:id", verifyToken, getUserProfile);
+
 // Deactivate user
 userRouter.put("/deactivate/:id", verifyToken, deactivateUser);
 
@@ -76,5 +81,10 @@ userRouter.put("/reactivate/:id", verifyToken, reactivateUser);
 
 // Delete user
 userRouter.delete("/:id", verifyToken, deleteUser);
+
+userRouter.get('/follow/status/:id', verifyToken, getFollowStatus);
+userRouter.get('/follow/:userId/counts', verifyToken, getFollowCounts);
+
+
 
 module.exports = userRouter;
