@@ -69,6 +69,11 @@ const userSchema = new mongoose.Schema({
       ref: 'Church',
     },
   ],
+  churchId: {
+  type: mongoose.Schema.Types.ObjectId,
+  ref: 'Church',
+  default: null,
+},
   assignedUnits: [
     {
       type: mongoose.Schema.Types.ObjectId,

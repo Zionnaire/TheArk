@@ -41,7 +41,7 @@ const joinUnit = async (req, res) => {
 
     user.assignedUnits.push(unitId);
     await user.save({ validateModifiedOnly: true });
-    unit.members.push({ userId: user.id, name: `${user.firstName} ${user.lastName}` });
+    unit.members.push({ userId: user._id, name: `${user.firstName} ${user.lastName}` });
     // unit member count should be updated
     unit.totalMembers = unit.members.length;
     await unit.save({ validateModifiedOnly: true });
@@ -110,7 +110,7 @@ const approveUnitMember = asyncHandler(async (req, res) => {
     // User leave a unit
 const leaveUnit = async (req, res) => {
   try {
-    const user = await User.findById(req.user.id);
+    const user = await User.findById(req.user._id);
     const unitId = req.params.id;
 
     if (!user) return res.status(404).json({ message: "User not found" });
@@ -247,18 +247,61 @@ const createUnit = asyncHandler(async (req, res) => {
 // @route   PUT /api/units/:id
 // @access  Private/Admin
 const updateUnit = asyncHandler(async (req, res) => {
-    const unit = await Unit.findById(req.params.id);
-    if (unit) {
-        unit.name = req.body.name || unit.name;
-        unit.description = req.body.description || unit.description;
-        const updatedUnit = await unit.save();
-        res.status(200).json(updatedUnit);
-    } else {
-        res.status(404);
-        throw new Error('Unit not found');
-    }
-});
+  const unitId = req.params.id;
+  const userId = req.user._id;
 
+  const unit = await Unit.findById(unitId);
+  if (!unit) {
+    res.status(404);
+    throw new Error("Unit not found");
+  }
+
+  const user = await User.findById(userId);
+
+  const isAuthorizedUnitHead =
+    user &&
+    user.isUnitHead &&
+    user.assignedUnits.some(
+      (assignedUnitId) => assignedUnitId.toString() === unitId.toString()
+    );
+
+  if (!isAuthorizedUnitHead) {
+    res.status(403);
+    throw new Error("Not authorized to edit this unit");
+  }
+
+  // 🔄 Update fields
+  unit.name = req.body.name || unit.name;
+  unit.description = req.body.description || unit.description;
+
+  // if (req.body.unitLogo) {
+  //   unit.unitLogo = {
+  //     url: req.body.unitLogo.url || unit.unitLogo?.url,
+  //     cld_id: req.body.unitLogo.cld_id || unit.unitLogo?.cld_id,
+  //   };
+  // }
+
+     // Handle churchLogo file upload
+      if (req.files && req.files.unitLogo) {
+        const file = req.files.unitLogo;
+        const base64Image = `data:${file.mimetype};base64,${file.data.toString("base64")}`;
+  
+        if (unit.unitLogo?.[0]?.cld_id) {
+          await cloudinary.uploader.destroy(unit.unitLogo[0].cld_id);
+        }
+  
+        const result = await uploadToCloudinary(base64Image, "unit-logos/");
+        unit.unitLogo = [{ url: result.secure_url, cld_id: result.public_id }];
+      } else if (req.body.clearUnitLogo === 'true') {
+        if (unit.unitLogo?.[0]?.cld_id) {
+          await cloudinary.uploader.destroy(unit.unitLogo[0].cld_id);
+        }
+        unit.unitLogo = [];
+      }
+
+  const updatedUnit = await unit.save();
+  res.status(200).json(updatedUnit);
+});
 
 // @desc    Delete unit
 // @route   DELETE /api/units/:id

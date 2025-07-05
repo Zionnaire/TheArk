@@ -121,19 +121,19 @@ const login = async (req, res) => {
     let user = await User.findOne({ email })
       .populate({
         path: "unitChats",
-        populate: { path: "lastMessage", select: "messageText sender createdAt" }, // Changed 'content' to 'messageText'
+        populate: { path: "lastMessage", select: "messageText sender createdAt" }, 
       })
       .populate({
         path: "departmentChats",
-        populate: { path: "lastMessage", select: "messageText sender createdAt" }, // Changed 'content' to 'messageText'
+        populate: { path: "lastMessage", select: "messageText sender createdAt" }, 
       })
       .populate({
         path: "privateChats",
-        populate: { path: "lastMessage", select: "messageText sender createdAt" }, // Changed 'content' to 'messageText'
+        populate: { path: "lastMessage", select: "messageText sender createdAt" }, 
       })
       .populate({
         path: "generalChats",
-        populate: { path: "lastMessage", select: "messageText sender createdAt" }, // Changed 'content' to 'messageText'
+        populate: { path: "lastMessage", select: "messageText sender createdAt" }, 
       });
 
     if (!user) {
@@ -147,9 +147,9 @@ const login = async (req, res) => {
     }
 
     // Create JWT tokens using the updated middleware functions
-    const token = signJwt({ user, role: user.role, name: user.firstName });
+    const token = signJwt({ user, role: user.role, name: user.firstName, churchId: user.churchId });
     // Corrected parameter for signRefreshToken from '_id' to 'id'.
-    const refreshToken = signRefreshToken({_id: user._id, role: user.role });
+    const refreshToken = signRefreshToken({_id: user._id, role: user.role, churchId: user.churchId });
 
     // Respond with user data and tokens
     res.json({
@@ -169,14 +169,15 @@ const login = async (req, res) => {
         bio: user.bio,
         posts: user.posts,
         socialMedia: user.socialMedia,
+        churchId: user.churchId,
 
         // Map populated chat data
         unitChats: user.unitChats?.map(chat => ({
           _id: chat._id,
           lastMessage: chat.lastMessage ? {
             _id: chat.lastMessage._id,
-            messageText: chat.lastMessage.messageText, // Use messageText
-            sender: chat.lastMessage.sender, // This will be the ID if not populated further
+            messageText: chat.lastMessage.messageText, 
+            sender: chat.lastMessage.sender,
             createdAt: chat.lastMessage.createdAt,
           } : null,
         })),
@@ -393,25 +394,35 @@ const updateProfile = async (req, res) => {
 
 // Get a user by ID (from authenticated user or params)
 // Get a single user by ID
+// In Controllers/userController.js, inside getAUserById
 const getAUserById = async (req, res) => {
   try {
-    const { userId } = req.params; // Get ID from route params
+    let { userId } = req.params;
 
-    // Populate followers and following with just necessary UserMiniProfile fields
+    if (userId === 'me') {
+      if (!req.user || !req.user._id) {
+        return res.status(401).json({ message: 'Not authorized, user data missing.' });
+      }
+      userId = req.user._id;
+    }
+
     const user = await User.findById(userId)
-      .select("-password") // exclude sensitive info
-      .populate("followers", "userName firstName lastName userImage _id") // Ensure _id is selected for populated fields
-      .populate("following", "userName firstName lastName userImage _id"); // Ensure _id is selected for populated fields
+      .select("-password")
+      .populate("followers", "userName firstName lastName userImage _id")
+      .populate("following", "userName firstName lastName userImage _id");
 
     if (!user) {
       return res.status(404).json({ message: "User not found" });
     }
 
-    // Return the user object directly. Mongoose document will have _id.
-    // If you need a plain JavaScript object, use .lean() or .toObject()
+    // ⭐ CRITICAL DEBUGGING: Log the user object BEFORE sending it
+    console.log("User object found by getAUserById (from DB):", user);
+    console.log("Does user.churchId exist?", user.churchId);
+    console.log("Does user.churchesJoined exist?", user.churchesJoined);
+
     return res.status(200).json({ user });
   } catch (err) {
-    console.error("Error fetching user:", err);
+    console.error("Error fetching user in getAUserById:", err);
     return res.status(500).json({ message: "Server error", error: err.message });
   }
 };
@@ -473,8 +484,10 @@ const getAllUserChats = async (req, res) => {
 // User join a church
 const joinChurch = async (req, res) => {
   try {
-    const { churchId } = req.body;
-    const userId = req.user._id; 
+    console.log("User joining (from old token payload): ", req.user); // This will show churchId: null
+
+    const { churchId } = req.body; // Church ID from frontend request body
+    const userId = req.user._id;   // User ID from the old token's payload
 
     if (!churchId) {
       return res.status(400).json({ message: 'Church ID is required' });
@@ -485,30 +498,59 @@ const joinChurch = async (req, res) => {
       return res.status(404).json({ message: 'Church not found' });
     }
 
-    const user = await User.findById(userId);
-
+    const user = await User.findById(userId); // Fetch the user from the DB
     if (!user) {
       return res.status(404).json({ message: 'User not found' });
     }
 
-    // Prevent duplicate joining
-    if (user.churchesJoined.includes(churchId)) {
+    // Check if user already joined this church
+    const alreadyJoined = user.churchesJoined.includes(churchId);
+    const alreadyMember = church.churchMembers.some(
+      (member) => member.userId?.toString() === userId.toString()
+    );
+
+    if (alreadyJoined || alreadyMember) {
       return res.status(400).json({ message: 'You have already joined this church.' });
     }
 
-    // Update user's joined churches
+    // Update user in DB
     user.churchesJoined.push(churchId);
-    await user.save();
+    user.churchId = churchId; // Set current active church
+    await user.save({ validateBeforeSave: false }); // Save the updated user document
 
+    // Update church in DB
+    church.churchMembers.push({
+      userId: user._id,
+      name: `${user.firstName} ${user.lastName}`,
+      email: user.email,
+    });
+    church.totalMembers += 1;
+    await church.save({ validateBeforeSave: false });
+
+    // ⭐⭐⭐ THE CRITICAL ADDITION: GENERATE A NEW TOKEN ⭐⭐⭐
+    const newToken = signJwt({ user, role: user.role, name: user.firstName, churchId: user.churchId},);
+        const refreshToken = signRefreshToken({_id: user._id, role: user.role, churchId: user.churchId });
+
+  
     res.status(200).json({
       message: 'Successfully joined the church',
       churchesJoined: user.churchesJoined,
+      churchId: user.churchId,
+      token: newToken, 
+      refreshToken: refreshToken,
+      updatedChurch: {
+        id: church._id,
+        totalMembers: church.totalMembers,
+        membersCount: church.churchMembers.length,
+      },
     });
+
   } catch (error) {
     console.error('Error joining church:', error);
     res.status(500).json({ message: 'Internal server error', error: error.message });
   }
 };
+
 
 // Forget password for user
 const forgetPassword = async (req, res) => {

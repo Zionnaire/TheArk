@@ -30,7 +30,7 @@ const {verifyToken} = require("../Middlewares/jwt");
 userRouter.get("/users", verifyToken, getAllUsers);
 
 // Get a user 
-userRouter.get("/:userId", getAUserById)
+userRouter.get("/:userId",verifyToken, getAUserById)
 
 // Register user
 userRouter.post("/register", register);

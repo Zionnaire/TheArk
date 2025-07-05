@@ -99,11 +99,11 @@ const churchSchema = new Schema({
             },
             name: {
                 type: String,
-                required: true
+                // required: true
             },
             email: {
                 type: String,
-                required: true
+                // required: true
             }
         }
     ],

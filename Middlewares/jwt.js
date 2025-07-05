@@ -17,14 +17,15 @@ const signJwt = ({ user = null, church = null, role }) => {
   let resolvedRole = role; // Use provided role first
 
   if (user) {
-    if (!role) resolvedRole = "member"; // Default to 'member' if no role provided for user
-    payload = {
-      id: user._id, // Use _id as the primary ID in the token
-      userId: user._id, // Explicitly keep userId for clarity if desired by frontend
-      role: resolvedRole,
-      // Prioritize userName, then firstName, then lastName, then a fallback
-      name: user.userName || user.firstName || user.lastName || "User",
-    };
+    if (!role) resolvedRole = "member"; 
+   payload = {
+  id: user._id,
+  userId: user._id,
+  churchId: user.churchId?.toString(),
+  role: resolvedRole,
+  name: user.userName || user.firstName || user.lastName || "User",
+};
+
   } else if (church) {
     if (!role) resolvedRole = "churchAdmin"; // Default to 'churchAdmin' if no role provided for church
     payload = {
@@ -36,6 +37,8 @@ const signJwt = ({ user = null, church = null, role }) => {
   } else {
     throw new Error("Either user or church must be provided to sign a token.");
   }
+// console.log("==> signJwt called with:", { user, church, role });
+
 
   // Ensure JWT_SECRET is loaded from environment variables
   if (!process.env.JWT_SECRET) {
@@ -78,7 +81,7 @@ const verifyToken = async (req, res, next) => {
     }
 
     const decoded = jwt.verify(token, process.env.JWT_SECRET);
-    // console.log("[verifyToken Middleware] Token successfully decoded:", decoded); // Keep this debug log
+  // console.log("[verifyToken Middleware] Token successfully decoded:", decoded); // Keep this debug log
 
     // Extract primary ID and role from decoded token payload
     const { id, role, userId, churchId } = decoded;
@@ -142,6 +145,13 @@ const verifyToken = async (req, res, next) => {
         }
       }
     }
+
+    // If no church admin match found, fallback to token churchId
+if (!churchRefId && churchId) {
+  churchRefId = churchId;
+}
+console.log("🧩 Final resolved churchId before req.user assignment:", churchRefId);
+
 
     // Construct req.user object based on the populated entity and resolved roles
     req.user = {

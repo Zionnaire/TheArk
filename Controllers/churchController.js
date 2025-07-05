@@ -266,22 +266,6 @@ const getChurchById = async (req, res) => {
         res.status(500).json({ message: 'Internal server error' });
     }
 }
-
-// Create controller for updating church details
-const updateChurch = async (req, res) => {
-    try {
-        const church = await Church.findById(req.params.id);
-        if (!church) {
-            return res.status(404).json({ message: 'Church not found' });
-        }
-        const updatedChurch = await Church.findByIdAndUpdate(req.params.id, req.body, { new: true });
-        res.status(200).json(updatedChurch);
-    } catch (error) {
-        console.error(error);
-        res.status(500).json({ message: 'Internal server error' });
-    }
-}
-
 /**
  * @desc Get authenticated church's profile
  * @route GET /api/v1/churches/profile
@@ -295,40 +279,65 @@ const getChurchProfile = async (req, res) => {
       return res.status(401).json({ message: 'Authentication context missing. Please log in.' });
     }
 
-    // 🎯 Use churchId from req.user (explicit is better than implicit here)
-    const churchId = req.user.churchId || req.user._id;
+    let churchId;
+console.log("📌 Church ID used:", churchId);
+console.log("👤 req.user:", req.user);
 
-    // 🧠 Populate key fields safely
+if (req.user.role === 'churchAdmin') {
+  console.log("📌 Church ID used:", churchId);
+console.log("👤 req.user:", req.user);
+
+  churchId = req.user._id; // church IS the user
+} else {
+  churchId = req.user.churchId;
+}
+
+if (!churchId) {
+  return res.status(400).json({ message: 'No churchId found in user context' });
+}
+
+    // 🔍 Query the Church model (NOT ChurchProfile)
     const church = await Church.findById(churchId)
-      .select('-password -cPassword -verificationCode -verificationCodeExpire -resetPasswordToken -resetPasswordExpire -resetCode -resetCodeExpire') // Strip sensitive fields
+      .select('-password -cPassword -verificationCode -verificationCodeExpire -resetPasswordToken -resetPasswordExpire -resetCode -resetCodeExpire')
       .populate({
         path: 'churchMembers',
         select: 'userName firstName lastName email userImage',
       })
       .populate({
         path: 'units',
-        select: 'unitName',
-        populate: {
-          path: 'departments',
-          select: 'name',
-        },
+        select: 'unitName unitLogo members unitHead totalMembers',
+        populate: [
+          {
+            path: 'departments',
+            select: 'name',
+          },
+          {
+            path: 'members',
+            select: 'userName firstName lastName _id',
+          },
+          {
+            path: 'unitHead',
+            select: 'userName firstName lastName _id',
+          },
+        ],
       });
 
     if (!church) {
-      return res.status(404).json({ message: 'Church profile not found' });
+      return res.status(404).json({ message: 'Church not found' }); // ✨ updated message
     }
 
-    // 🚀 Respond with clean church data
+    // ✅ Send clean church object
     res.status(200).json({
       success: true,
-      church: church.toObject(), // Flatten Mongoose doc
+      data: church.toObject(),
     });
 
   } catch (error) {
-    console.error('Error fetching church profile:', error);
+    console.error('❌ Error fetching church profile:', error);
     res.status(500).json({ message: 'Internal server error' });
   }
 };
+
 /**
  * @desc Update authenticated church's profile
  * @route PUT /api/v1/churches/profile
@@ -419,7 +428,7 @@ const updateChurchProfile = async (req, res) => {
       })
       .populate({
         path: 'units',
-        select: 'unitName',
+        select: 'unitName unitLogo',
         populate: {
           path: 'departments',
           select: 'name',
@@ -520,10 +529,13 @@ const createUnit = async (req, res) => {
     church.units.push(unit._id);
     await church.save();
 
-    const populatedUnit = await Unit.findById(unit._id)
-      .populate('departments', 'name')
-      .populate('members', 'userName firstName lastName')
-      .populate('unitHead', 'userName firstName lastName');
+  const populatedUnit = await Unit.findById(unit._id)
+  .populate('departments', 'name')
+  .populate('members', 'name userName firstName lastName userImage')
+  .populate('unitHead', 'userName firstName lastName userImage')
+  .lean(); 
+
+console.log('Unit with logos:', populatedUnit);
 
     res.status(201).json({
       message: "Unit created successfully",
@@ -806,7 +818,6 @@ module.exports = {
     logoutChurch,
     getAllChurches,
     getChurchById,
-    updateChurch,
     createUnit,
     getAllUnits,
     getUnitById,

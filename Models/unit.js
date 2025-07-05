@@ -7,20 +7,31 @@ const unitSchema = new mongoose.Schema({
     unique: true,
     trim: true,
   },
-  unitLogo: {
-  url: { type: String },
-  cld_id: { type: String }
-},
+  unitLogo: [
+    {
+      url: { type: String },
+      cld_id: { type: String },
+    },
+  ],
   church: {
     type: mongoose.Schema.Types.ObjectId,
     ref: "Church",
     // required: true, // 🔥 makes it non-floating
   },
   unitHead: {
-    type: mongoose.Schema.Types.ObjectId,
-    ref: "User",
-    default: null,
-  },
+              _id: {
+                  type: mongoose.Schema.Types.ObjectId,
+                  ref: 'User'
+              },
+              name: {
+                  type: String,
+                  // required: true
+              },
+              email: {
+                  type: String,
+                  // required: true
+              }
+          },
   description: {
     type: String,
     trim: true,
@@ -31,7 +42,12 @@ const unitSchema = new mongoose.Schema({
   },
  departments: [{ type: mongoose.Schema.Types.ObjectId, ref: "Department" }],
 chatGroups: [{ type: mongoose.Schema.Types.ObjectId, ref: "ChatGroup" }],
-members: [{ type: mongoose.Schema.Types.ObjectId, ref: "User" }],
+members: [
+  {
+    userId: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
+    userName: String,
+  }
+],
 
   pendingRequests: [
     {

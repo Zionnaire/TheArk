@@ -2,22 +2,21 @@ const express = require("express");
 const churchRouter = express.Router();
 
 const {
-  registerChurch,
-  loginChurch,
-  getChurchById,
-  getAllChurches,
-  updateChurch,
-  logoutChurch,
-   createUnit,
-      getAllUnits,
-      getUnitById,
-      updateUnit,
-      assignUnitHead,
-      removeUnitHead,
-      getAllUnitMembers,
-      getAllChurchMembers,
-      getChurchProfile,
-      updateChurchProfile
+  registerChurch,
+  loginChurch,
+  getChurchById,
+  getAllChurches,
+  logoutChurch,
+  createUnit,
+  getAllUnits,
+  getUnitById,
+  updateUnit,
+  assignUnitHead,
+  removeUnitHead,
+  getAllUnitMembers,
+  getAllChurchMembers,
+  getChurchProfile,
+  updateChurchProfile,
 } = require("../Controllers/churchController");
 
 const { verifyToken } = require("../Middlewares/jwt");
@@ -28,8 +27,8 @@ churchRouter.post("/login", loginChurch);
 churchRouter.get("/logout", verifyToken, logoutChurch);
 
 // Specific Church Profile routes - PLACE THESE BEFORE /:id
-churchRouter.get("/profile", verifyToken, getChurchProfile); 
-churchRouter.put("/updateProfile", verifyToken, updateChurchProfile); 
+churchRouter.get("/profile", verifyToken, getChurchProfile);
+churchRouter.put("/updateProfile", verifyToken, updateChurchProfile);
 
 // Unit creation (no :id conflict here)
 churchRouter.post("/units", verifyToken, createUnit);
@@ -46,11 +45,9 @@ churchRouter.get("/:id/members", getAllChurchMembers); // All members for a spec
 
 // General `:id` routes - PLACE THESE LAST
 churchRouter.get("/:id", getChurchById); // <-- This should be lower now
-churchRouter.put("/:id", verifyToken, updateChurch); // <-- This should be lower now
 
 // Route for getting ALL churches (no params, very general)
 churchRouter.get("/", getAllChurches);
-
 
 exports = churchRouter;
 module.exports = churchRouter;
