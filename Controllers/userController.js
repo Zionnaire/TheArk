@@ -1,4 +1,4 @@
-
+const mongoose = require('mongoose');
 const User = require("../Models/user");
 const Church = require("../Models/churchesAdmin")
 const bcrypt = require("bcryptjs");
@@ -10,7 +10,6 @@ const { uploadToCloudinary } = require("../Middlewares/cloudinaryUpload");
 // Register user
 const crypto = require("crypto");
 const nodemailer = require("nodemailer");
-
 
 const generateVerificationCode = () =>
   Math.floor(100000 + Math.random() * 900000).toString();
@@ -393,37 +392,42 @@ const updateProfile = async (req, res) => {
 };
 
 // Get a user by ID (from authenticated user or params)
-// Get a single user by ID
-// In Controllers/userController.js, inside getAUserById
 const getAUserById = async (req, res) => {
   try {
     let { userId } = req.params;
 
     if (userId === 'me') {
       if (!req.user || !req.user._id) {
-        return res.status(401).json({ message: 'Not authorized, user data missing.' });
+        return res.status(401).json({ message: 'Unauthorized: User data missing' });
       }
       userId = req.user._id;
     }
 
-    const user = await User.findById(userId)
-      .select("-password")
-      .populate("followers", "userName firstName lastName userImage _id")
-      .populate("following", "userName firstName lastName userImage _id");
-
-    if (!user) {
-      return res.status(404).json({ message: "User not found" });
+    if (!mongoose.Types.ObjectId.isValid(userId)) {
+      return res.status(400).json({ message: 'Invalid User ID' });
     }
 
-    // ⭐ CRITICAL DEBUGGING: Log the user object BEFORE sending it
-    console.log("User object found by getAUserById (from DB):", user);
-    console.log("Does user.churchId exist?", user.churchId);
-    console.log("Does user.churchesJoined exist?", user.churchesJoined);
+    const user = await User.findById(userId)
+      .select('firstName lastName userName churchId churchName assignedUnits unitId unitName followers following')
+      .populate('followers', 'userName firstName lastName userImage _id')
+      .populate('following', 'userName firstName lastName userImage _id');
 
-    return res.status(200).json({ user });
+    if (!user) {
+      return res.status(404).json({ message: 'User not found' });
+    }
+
+    // Log user data for debugging
+    logger.debug(`Fetched user (userId: ${userId}):`, {
+      userId: user._id,
+      userName: user.userName,
+      churchId: user.churchId,
+      assignedUnits: user.assignedUnits,
+    });
+
+    return res.status(200).json(user);
   } catch (err) {
-    console.error("Error fetching user in getAUserById:", err);
-    return res.status(500).json({ message: "Server error", error: err.message });
+    logger.error(`Error fetching user (userId: ${req.params.userId || req.user?._id}):`, err);
+    return res.status(500).json({ message: 'Failed to fetch user data. Please try again.' });
   }
 };
 

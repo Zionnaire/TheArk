@@ -1,4 +1,4 @@
-
+const mongoose = require('mongoose')
 const logger = require('../Middlewares/logger');
 const Unit = require('../Models/unit');
 const User = require('../Models/user');
@@ -8,53 +8,132 @@ const asyncHandler = require('express-async-handler');
 
   // User join a unit 
 const joinUnit = async (req, res) => {
+  const session = await mongoose.startSession();
+  session.startTransaction();
   try {
-    const unitId = req.params.id || req.body.unitId;
-    if (!unitId) {
-      return res.status(400).json({ message: 'Unit ID is required' });
+    const unitId = req.params.id;
+    if (!unitId || !mongoose.Types.ObjectId.isValid(unitId)) {
+      await session.abortTransaction();
+      session.endSession();
+      return res.status(400).json({ message: 'Valid Unit ID is required' });
     }
 
-    const unit = await Unit.findById(unitId);
+    const unit = await Unit.findById(unitId).session(session);
     if (!unit) {
+      await session.abortTransaction();
+      session.endSession();
       return res.status(404).json({ message: 'Unit not found' });
     }
 
-        console.log('req.user:', req.user);
-
-    if (!req.user || !req.user.id) {
+    if (!req.user || !req.user._id) {
+      await session.abortTransaction();
+      session.endSession();
       return res.status(401).json({ message: 'Unauthorized: User not found in request' });
     }
 
-
-    const user = await User.findById(req.user.id);
+    const user = await User.findById(req.user._id).session(session);
     if (!user) {
+      await session.abortTransaction();
+      session.endSession();
       return res.status(404).json({ message: 'User not found' });
     }
 
     if (user.assignedUnits.length >= 3) {
-      return res.status(400).json({ message: "You can only be in up to 3 units" });
+      await session.abortTransaction();
+      session.endSession();
+      return res.status(400).json({ message: 'You can only join up to 3 units' });
     }
 
     if (user.assignedUnits.includes(unitId)) {
-      return res.status(409).json({ message: "Already in this unit" });
+      await session.abortTransaction();
+      session.endSession();
+      return res.status(409).json({ message: 'You are already in this unit' });
     }
 
     user.assignedUnits.push(unitId);
-    await user.save({ validateModifiedOnly: true });
     unit.members.push({ userId: user._id, name: `${user.firstName} ${user.lastName}` });
-    // unit member count should be updated
     unit.totalMembers = unit.members.length;
-    await unit.save({ validateModifiedOnly: true });
 
-    return res.status(200).json({ message: "User joined the unit successfully", unit });
+    await user.save({ validateModifiedOnly: true, session });
+    await unit.save({ validateModifiedOnly: true, session });
+
+    await session.commitTransaction();
+
+    return res.status(200).json({
+      message: 'User joined the unit successfully',
+      unit,
+      user: { assignedUnits: user.assignedUnits },
+    });
   } catch (error) {
-    logger.error("Error joining unit:", error);
-    console.error("Error joining unit:", error);
-    res.status(500).json({ message: error.message });
+    await session.abortTransaction();
+    logger.error(`Error joining unit (userId: ${req.user?._id}, unitId: ${req.params.id}):`, error);
+    return res.status(500).json({ message: 'Failed to join unit. Please try again.' });
+  } finally {
+    session.endSession();
   }
 };
 
 
+    // User leave a unit
+const leaveUnit = async (req, res) => {
+  const session = await mongoose.startSession();
+  session.startTransaction();
+  try {
+    const unitId = req.params.id;
+    if (!unitId || !mongoose.Types.ObjectId.isValid(unitId)) {
+      await session.abortTransaction();
+      session.endSession();
+      return res.status(400).json({ message: 'Valid Unit ID is required' });
+    }
+
+    if (!req.user || !req.user._id) {
+      await session.abortTransaction();
+      session.endSession();
+      return res.status(401).json({ message: 'Unauthorized: User not found in request' });
+    }
+
+    const user = await User.findById(req.user._id).session(session);
+    if (!user) {
+      await session.abortTransaction();
+      session.endSession();
+      return res.status(404).json({ message: 'User not found' });
+    }
+
+    if (!user.assignedUnits.includes(unitId)) {
+      await session.abortTransaction();
+      session.endSession();
+      return res.status(400).json({ message: 'You are not a member of this unit' });
+    }
+
+    const unit = await Unit.findById(unitId).session(session);
+    if (!unit) {
+      await session.abortTransaction();
+      session.endSession();
+      return res.status(404).json({ message: 'Unit not found' });
+    }
+
+    user.assignedUnits = user.assignedUnits.filter((uid) => uid.toString() !== unitId);
+    unit.members = unit.members.filter((member) => member.userId.toString() !== user._id.toString());
+    unit.totalMembers = unit.members.length;
+
+    await user.save({ validateModifiedOnly: true, session });
+    await unit.save({ validateModifiedOnly: true, session });
+
+    await session.commitTransaction();
+
+    return res.status(200).json({
+      message: 'Successfully left unit',
+      unit,
+      user: { assignedUnits: user.assignedUnits },
+    });
+  } catch (error) {
+    await session.abortTransaction();
+    logger.error(`Error leaving unit (userId: ${req.user?._id}, unitId: ${req.params.id}):`, error);
+    return res.status(500).json({ message: 'Failed to leave unit. Please try again.' });
+  } finally {
+    session.endSession();
+  }
+};
   const requestToJoinUnit = asyncHandler(async (req, res) => {
     const { unitId } = req.body;
     const user = req.user;
@@ -106,35 +185,6 @@ const approveUnitMember = asyncHandler(async (req, res) => {
 
   res.status(200).json({ message: "User approved and added to unit" });
 });
-  
-    // User leave a unit
-const leaveUnit = async (req, res) => {
-  try {
-    const user = await User.findById(req.user._id);
-    const unitId = req.params.id;
-
-    if (!user) return res.status(404).json({ message: "User not found" });
-
-    user.assignedUnits = user.assignedUnits.filter(
-      (uid) => uid.toString() !== unitId
-    );
-
-    await user.save({ validateModifiedOnly: true });
-    // Update unit member count
-    const unit = await Unit.findById(unitId);
-    if (!unit) return res.status(404).json({ message: "Unit not found" });  
-    unit.members = unit.members.filter(
-      (member) => member.userId.toString() !== user._id.toString()
-    );
-    unit.totalMembers = unit.members.length;
-    await unit.save({ validateModifiedOnly: true });
-    
-    return res.status(200).json({ message: "Successfully left unit" });
-  } catch (err) {
-    console.error("Leave unit error:", err);
-    return res.status(500).json({ message: "Server error" });
-  }
-};
 
 
 // Get all members of a unit
