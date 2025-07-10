@@ -146,7 +146,7 @@ const login = async (req, res) => {
     }
 
     // Create JWT tokens using the updated middleware functions
-    const token = signJwt({ user, role: user.role, name: user.firstName, churchId: user.churchId });
+    const token = signJwt({ user, role: user.role, name: user.firstName, churchId: user.churchId, assignedUnits: user.assignedUnits });
     // Corrected parameter for signRefreshToken from '_id' to 'id'.
     const refreshToken = signRefreshToken({_id: user._id, role: user.role, churchId: user.churchId });
 
@@ -215,7 +215,7 @@ const login = async (req, res) => {
 
   } catch (err) {
     console.error("Login Error:", err.message);
-    // logger?.error?.(err.message); // Optional: your custom logger if defined globally/imported
+    logger?.error?.(err.message); // Optional: your custom logger if defined globally/imported
     res.status(500).send("Server error");
   }
 };
@@ -240,7 +240,6 @@ const logoutUser = async (req, res) => {
 // Get user profile
 const getProfile = async (req, res) => {
   try {
-    // console.log("User from token:", req.user);
     // Ensure the user is authenticated
     if (!req.user || !req.user._id) {
       return res
@@ -266,34 +265,57 @@ const getProfile = async (req, res) => {
 };
 
 const getUserProfile = async (req, res) => {
-  try {
-    const currentUserId = req.user._id;
-    const userId = req.params.id;
+  const currentUserId = req.user._id;
+  const userId = req.params.id;
 
-    if (!userId) {
-      return res.status(400).json({ message: "User ID is required" });
-    }
+  // console.log('userController: getUserProfile', { userId, currentUserId });
 
-    const user = await User.findById(userId)
-      .select("userName firstName lastName userImage followersCount followingCount followers bio")
-      .lean();
-
-    if (!user) {
-      return res.status(404).json({ message: "User not found" });
-    }
-
-    const isFollowing = user.followers.some(
-      followerId => followerId.toString() === currentUserId.toString()
-    );
-
-    res.status(200).json({
-      ...user,
-      isFollowing,
-    });
-  } catch (err) {
-    console.error("Get user profile error:", err);
-    res.status(500).json({ message: "Server error" });
+  if (!userId) {
+    console.error('userController: User ID is required', { userId });
+    res.status(400);
+    throw new Error('User ID is required');
   }
+
+  const user = await User.findById(userId)
+    .select('userName firstName lastName userImage followersCount followingCount followers bio socialMedia churchId assignedUnits')
+    .populate('churchId', 'churchName')
+    .lean();
+
+  if (!user) {
+    console.error('userController: User not found', { userId });
+    res.status(404);
+    throw new Error('User not found');
+  }
+
+  const isFollowing = user.followers.some(
+    followerId => followerId.toString() === currentUserId.toString()
+  );
+
+  const response = {
+    _id: user._id.toString(),
+    userName: user.userName,
+    firstName: user.firstName || '',
+    lastName: user.lastName || '',
+    userImage: user.userImage || [],
+    followersCount: user.followersCount || user.followers.length || 0,
+    followingCount: user.followingCount || user.following?.length || 0,
+    followers: user.followers || [],
+    bio: user.bio || '',
+    socialMedia: user.socialMedia || [],
+    churchId: user.churchId?._id?.toString() || user.churchId || '',
+    churchName: user.churchId?.churchName || '',
+    assignedUnits: user.assignedUnits || [],
+    isFollowing,
+  };
+
+  // console.log('userController: Returning profile', {
+  //   userId,
+  //   churchId: response.churchId,
+  //   churchName: response.churchName,
+  //   assignedUnits: response.assignedUnits,
+  // });
+
+  res.status(200).json(response);
 };
 
 
@@ -311,7 +333,7 @@ const updateProfile = async (req, res) => {
       isEmailVerified,
     } = req.body;
 
-    console.log("This is req user", req.user);
+    // console.log("This is req user", req.user);
 
     const userId = req.user?._id;
 
@@ -320,7 +342,7 @@ const updateProfile = async (req, res) => {
     }
 
     const user = await User.findById(userId);
-    console.log("This is the stored user", user);
+    // console.log("This is the stored user", user);
 
     if (!user) {
       return res.status(404).json({ message: "User not found" });
@@ -341,7 +363,7 @@ const updateProfile = async (req, res) => {
       user.socialMedia = parsed;
     }
 
-    console.log(req.files, "This is req files");
+    // console.log(req.files, "This is req files");
     
     // Image upload
     if (req.files && req.files.userImage) {
@@ -488,7 +510,7 @@ const getAllUserChats = async (req, res) => {
 // User join a church
 const joinChurch = async (req, res) => {
   try {
-    console.log("User joining (from old token payload): ", req.user); // This will show churchId: null
+    // console.log("User joining (from old token payload): ", req.user); // This will show churchId: null
 
     const { churchId } = req.body; // Church ID from frontend request body
     const userId = req.user._id;   // User ID from the old token's payload
@@ -633,7 +655,6 @@ const deactivateUser = async (req, res) => {
         .json({ message: "Unauthorized: No token provided" });
     }
 
-    // console.log("Decoded user:", req.user);
     // Ensure the logged-in user is the one being deactivated
     if (req.user.user.id.toString() !== userId.toString()) {
       return res

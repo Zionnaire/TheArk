@@ -17,7 +17,7 @@ const verifyAndRegister = async (req, res) => {
 
     if (user.verificationCode !== verificationCode) {
       return res.status(400).json({ message: 'Invalid verification code' });
-      // console.log(verificationCode);
+   
     }
           console.log(user.verificationCode);
 
@@ -80,7 +80,7 @@ const churchVerifyAndRegister = async (req, res) => {
       message: 'Email verified successfully',
       token, 
       church: {
-        id: church._id,
+        churchId: church._id,
         churchEmail: church.churchEmail,
         churchName: church.churchName,
         isEmailVerified: church.isEmailVerified,

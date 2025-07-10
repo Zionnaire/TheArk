@@ -2,7 +2,10 @@ const mongoose = require('mongoose')
 const logger = require('../Middlewares/logger');
 const Unit = require('../Models/unit');
 const User = require('../Models/user');
+const Church = require('../Models/churchesAdmin')
+const Department = require('../Models/departments')
 const asyncHandler = require('express-async-handler');
+const { error } = require('winston');
 
 
 
@@ -15,43 +18,44 @@ const joinUnit = async (req, res) => {
     if (!unitId || !mongoose.Types.ObjectId.isValid(unitId)) {
       await session.abortTransaction();
       session.endSession();
-      return res.status(400).json({ message: 'Valid Unit ID is required' });
+      return res.status(400).json({ message: "Valid Unit ID is required" });
     }
 
     const unit = await Unit.findById(unitId).session(session);
     if (!unit) {
       await session.abortTransaction();
       session.endSession();
-      return res.status(404).json({ message: 'Unit not found' });
+      return res.status(404).json({ message: "Unit not found" });
     }
 
     if (!req.user || !req.user._id) {
       await session.abortTransaction();
       session.endSession();
-      return res.status(401).json({ message: 'Unauthorized: User not found in request' });
+      return res.status(401).json({ message: "Unauthorized: User not found in request" });
     }
 
     const user = await User.findById(req.user._id).session(session);
     if (!user) {
       await session.abortTransaction();
       session.endSession();
-      return res.status(404).json({ message: 'User not found' });
+      return res.status(404).json({ message: "User not found" });
     }
 
     if (user.assignedUnits.length >= 3) {
       await session.abortTransaction();
       session.endSession();
-      return res.status(400).json({ message: 'You can only join up to 3 units' });
+      return res.status(400).json({ message: "You can only join up to 3 units" });
     }
 
     if (user.assignedUnits.includes(unitId)) {
       await session.abortTransaction();
       session.endSession();
-      return res.status(409).json({ message: 'You are already in this unit' });
+      return res.status(409).json({ message: "You are already in this unit" });
     }
 
     user.assignedUnits.push(unitId);
-    unit.members.push({ userId: user._id, name: `${user.firstName} ${user.lastName}` });
+    unit.members = unit.members || []; // Initialize if undefined
+    unit.members.push(user._id); // Push ObjectId directly
     unit.totalMembers = unit.members.length;
 
     await user.save({ validateModifiedOnly: true, session });
@@ -59,20 +63,25 @@ const joinUnit = async (req, res) => {
 
     await session.commitTransaction();
 
+    logger.info(`User ${user._id} successfully joined unit ${unitId}`);
     return res.status(200).json({
-      message: 'User joined the unit successfully',
-      unit,
+      message: "User joined the unit successfully",
+      unit: {
+        _id: unit._id,
+        unitName: unit.unitName,
+        totalMembers: unit.totalMembers,
+        members: unit.members,
+      },
       user: { assignedUnits: user.assignedUnits },
     });
   } catch (error) {
     await session.abortTransaction();
     logger.error(`Error joining unit (userId: ${req.user?._id}, unitId: ${req.params.id}):`, error);
-    return res.status(500).json({ message: 'Failed to join unit. Please try again.' });
+    return res.status(500).json({ message: "Failed to join unit. Please try again." });
   } finally {
     session.endSession();
   }
-};
-
+}
 
     // User leave a unit
 const leaveUnit = async (req, res) => {
@@ -83,53 +92,61 @@ const leaveUnit = async (req, res) => {
     if (!unitId || !mongoose.Types.ObjectId.isValid(unitId)) {
       await session.abortTransaction();
       session.endSession();
-      return res.status(400).json({ message: 'Valid Unit ID is required' });
+      return res.status(400).json({ message: "Valid Unit ID is required" });
     }
 
     if (!req.user || !req.user._id) {
       await session.abortTransaction();
       session.endSession();
-      return res.status(401).json({ message: 'Unauthorized: User not found in request' });
+      return res.status(401).json({ message: "Unauthorized: User not found in request" });
     }
 
     const user = await User.findById(req.user._id).session(session);
     if (!user) {
       await session.abortTransaction();
       session.endSession();
-      return res.status(404).json({ message: 'User not found' });
+      return res.status(404).json({ message: "User not found" });
     }
 
     if (!user.assignedUnits.includes(unitId)) {
       await session.abortTransaction();
       session.endSession();
-      return res.status(400).json({ message: 'You are not a member of this unit' });
+      return res.status(400).json({ message: "You are not a member of this unit" });
     }
 
     const unit = await Unit.findById(unitId).session(session);
     if (!unit) {
       await session.abortTransaction();
       session.endSession();
-      return res.status(404).json({ message: 'Unit not found' });
+      return res.status(404).json({ message: "Unit not found" });
     }
 
-    user.assignedUnits = user.assignedUnits.filter((uid) => uid.toString() !== unitId);
-    unit.members = unit.members.filter((member) => member.userId.toString() !== user._id.toString());
+    unit.members = unit.members || []; // Initialize if undefined
+    unit.members = unit.members.filter((member) => member.toString() !== user._id.toString());
     unit.totalMembers = unit.members.length;
+
+    user.assignedUnits = user.assignedUnits.filter((uid) => uid.toString() !== unitId);
 
     await user.save({ validateModifiedOnly: true, session });
     await unit.save({ validateModifiedOnly: true, session });
 
     await session.commitTransaction();
 
+    logger.info(`User ${user._id} successfully left unit ${unitId}`);
     return res.status(200).json({
-      message: 'Successfully left unit',
-      unit,
+      message: "Successfully left unit",
+      unit: {
+        _id: unit._id,
+        unitName: unit.unitName,
+        totalMembers: unit.totalMembers,
+        members: unit.members,
+      },
       user: { assignedUnits: user.assignedUnits },
     });
   } catch (error) {
     await session.abortTransaction();
     logger.error(`Error leaving unit (userId: ${req.user?._id}, unitId: ${req.params.id}):`, error);
-    return res.status(500).json({ message: 'Failed to leave unit. Please try again.' });
+    return res.status(500).json({ message: "Failed to leave unit. Please try again." });
   } finally {
     session.endSession();
   }
@@ -205,167 +222,182 @@ const getUnitMembers = async (req, res) => {
 }
 }
 
-
-// @desc    Add unit members
-// @route   PATCH /api/units/:unitId/add-member
-// @access  Private (only unitHead)
-const addUnitMember = asyncHandler(async (req, res) => {
-  const { unitId } = req.params;
-  const userId = req.user._id;
-
-  const unit = await Unit.findById(unitId);
-  if (!unit) {
-    res.status(404);
-    throw new Error("Unit not found");
-  }
-
-  // Ensure requester is unitHead
-  if (unit.unitHead.toString() !== userId.toString()) {
-    res.status(403);
-    throw new Error("Only the unit head can add members");
-  }
-
-  // Ensure member exists
-  const member = await User.findById(userId);
-  if (!member) {
-    res.status(404);
-    throw new Error("User to add not found");
-  }
-
-  // Check if already in unit
-  if (unit.members.includes(userId)) {
-    res.status(400);
-    throw new Error("User is already a member of this unit");
-  }
-
-  // Optional: Check if member already belongs to 2 units
-  const memberUnits = await Unit.find({ members: userId });
-  if (memberUnits.length >= 3) {
-    res.status(400);
-    throw new Error("User already belongs to 3 units");
-  }
-
-  // Add member to unit
-  unit.members.push(userId);
-  await unit.save();
-
-  // Update user's unitId
-  user.assignedUnits.push(unitId);
-  await user.save();
-  
-
-  res.status(200).json({
-    message: "User added to unit successfully",
-    unit,
-  });
-});
-
 // @desc    Get all units
 // @route   GET /api/units
 // @access  Public
-const getUnits = asyncHandler(async (req, res) => {
-    const units = await Unit.find({});
-    res.status(200).json(units);
-});
+// Get all units for a church with pagination
+const getAllUnits = asyncHandler(async (req, res) => {
+  const { churchId, page = 1, limit = 10 } = req.query;
+  if (!churchId) {
+    return res.status(400).json({ success: false, message: "Church ID is required" });
+  }
 
-// @desc    Get single unit
-// @route   GET /api/units/:id
-// @access  Public
-const getUnit = asyncHandler(async (req, res) => {
-    const unit = await Unit.findById(req.params.id);
-    if (unit) {
-        res.status(200).json(unit);
-    } else {
-        res.status(404);
-        throw new Error('Unit not found');
-    }
-});
-
-// @desc    Create unit
-// @route   POST /api/units
-// @access  Private/Admin
-const createUnit = asyncHandler(async (req, res) => {
-    const { name, description } = req.body;
-    const unit = await Unit.create({
-        name,
-        description
+  try {
+    console.log("Server: Fetching units for churchId:", churchId, { page, limit });
+    const church = await Church.findById(churchId).populate({
+      path: "units",
+      populate: { path: "unitHead", select: "userName email" },
     });
-    res.status(201).json(unit);
-});
-
-// @desc    Update unit
-// @route   PUT /api/units/:id
-// @access  Private/Admin
-const updateUnit = asyncHandler(async (req, res) => {
-  const unitId = req.params.id;
-  const userId = req.user._id;
-
-  const unit = await Unit.findById(unitId);
-  if (!unit) {
-    res.status(404);
-    throw new Error("Unit not found");
-  }
-
-  const user = await User.findById(userId);
-
-  const isAuthorizedUnitHead =
-    user &&
-    user.isUnitHead &&
-    user.assignedUnits.some(
-      (assignedUnitId) => assignedUnitId.toString() === unitId.toString()
-    );
-
-  if (!isAuthorizedUnitHead) {
-    res.status(403);
-    throw new Error("Not authorized to edit this unit");
-  }
-
-  // 🔄 Update fields
-  unit.name = req.body.name || unit.name;
-  unit.description = req.body.description || unit.description;
-
-  // if (req.body.unitLogo) {
-  //   unit.unitLogo = {
-  //     url: req.body.unitLogo.url || unit.unitLogo?.url,
-  //     cld_id: req.body.unitLogo.cld_id || unit.unitLogo?.cld_id,
-  //   };
-  // }
-
-     // Handle churchLogo file upload
-      if (req.files && req.files.unitLogo) {
-        const file = req.files.unitLogo;
-        const base64Image = `data:${file.mimetype};base64,${file.data.toString("base64")}`;
-  
-        if (unit.unitLogo?.[0]?.cld_id) {
-          await cloudinary.uploader.destroy(unit.unitLogo[0].cld_id);
-        }
-  
-        const result = await uploadToCloudinary(base64Image, "unit-logos/");
-        unit.unitLogo = [{ url: result.secure_url, cld_id: result.public_id }];
-      } else if (req.body.clearUnitLogo === 'true') {
-        if (unit.unitLogo?.[0]?.cld_id) {
-          await cloudinary.uploader.destroy(unit.unitLogo[0].cld_id);
-        }
-        unit.unitLogo = [];
-      }
-
-  const updatedUnit = await unit.save();
-  res.status(200).json(updatedUnit);
-});
-
-// @desc    Delete unit
-// @route   DELETE /api/units/:id
-// @access  Private/Admin
-const deleteUnit = asyncHandler(async (req, res) => {
-    const unit = await Unit.findById(req.params.id);
-    if (unit) {
-        await unit.remove();
-        res.status(200).json({ message: 'Unit removed' });
-    } else {
-        res.status(404);
-        throw new Error('Unit not found');
+    if (!church) {
+      return res.status(404).json({ success: false, message: "Church not found" });
     }
+
+    const units = church.units || [];
+    const total = units.length;
+    const startIndex = (parseInt(page) - 1) * parseInt(limit);
+    const paginatedUnits = units.slice(startIndex, startIndex + parseInt(limit));
+
+    console.log("Server: Units fetched:", {
+      total,
+      page: parseInt(page),
+      limit: parseInt(limit),
+      units: paginatedUnits.map((u) => ({
+        unitName: u.unitName,
+        unitLogo: u.unitLogo,
+        hasLogo: !!u.unitLogo?.length,
+        logoUrl: u.unitLogo?.[0]?.url || "No URL",
+        logoUri: u.unitLogo?.[0]?.uri || u.unitLogo?.[0]?.url || "No URI",
+        unitHead: u.unitHead,
+      })),
+    });
+
+    res.status(200).json({
+      success: true,
+      units: paginatedUnits.map((unit) => ({
+        _id: unit._id,
+        unitName: unit.unitName,
+        description: unit.description,
+        unitHead: unit.unitHead
+          ? {
+              _id: unit.unitHead._id,
+              userName: unit.unitHead.userName || "",
+              email: unit.unitHead.email || "",
+            }
+          : undefined,
+        totalMembers: unit.members?.length || 0,
+        members: unit.members,
+        unitLogo: Array.isArray(unit.unitLogo)
+          ? unit.unitLogo.map((img) => ({
+              url: img.url || "",
+              uri: img.uri || img.url || "", // Ensure uri is always set
+              cld_id: img.cld_id || "default",
+              type: img.type || "image",
+            }))
+          : unit.unitLogo && typeof unit.unitLogo === "object" && "url" in unit.unitLogo
+          ? [
+              {
+                url: unit.unitLogo.url || "",
+                uri: unit.unitLogo.uri || unit.unitLogo.url || "", // Ensure uri is always set
+                cld_id: unit.unitLogo.cld_id || "default",
+                type: img.type || "image",
+              },
+            ]
+          : [],
+      })),
+      pagination: {
+        total,
+        page: parseInt(page),
+        limit: parseInt(limit),
+        totalPages: Math.ceil(total / parseInt(limit)),
+      },
+    });
+  } catch (error) {
+    console.error("Server: Error fetching units:", error);
+    res.status(500).json({ success: false, message: "Server error while fetching units" });
+  }
 });
+
+// Get single unit by ID
+const getUnit = async (req, res) => {
+  const { unitId } = req.params;
+  const { churchId } = req.query;
+  if (!unitId || !churchId) {
+    console.error("unitController: Missing unitId or churchId", { unitId, churchId });
+    return res.status(400).json({ success: false, message: "Unit ID and Church ID are required" });
+  }
+
+  try {
+    // console.log("Server: Fetching unit:", { unitId, churchId });
+    const unit = await Unit.findById(unitId)
+      .populate("unitHead", "userName email")
+      .populate({
+        path: "departments",
+        select: "name description unit members",
+        populate: { path: "members", select: "_id" },
+      })
+      .populate("members", "_id");
+
+    if (!unit) {
+      console.error("unitController: Unit not found", { unitId, churchId });
+      return res.status(404).json({ success: false, message: "Unit not found" });
+    }
+
+    // console.log("Server: Unit churchId check:", {
+    //   unitChurchId: unit.church.toString(),
+    //   requestChurchId: churchId.toString(),
+    // });
+    if (unit.church.toString() !== churchId.toString()) {
+      return res.status(400).json({ success: false, message: "Unit does not belong to the specified church" });
+    }
+
+    // Debug departments and members
+    const departmentIds = unit.departments.map((d) => d._id.toString());
+    // console.log("Server: Department IDs in unit:", { departmentIds });
+    const departmentsExist = await Department.find({ _id: { $in: departmentIds } });
+    // console.log("Server: Departments exist in DB:", {
+    //   departmentCount: departmentsExist.length,
+    //   departmentIds: departmentsExist.map((d) => d._id.toString()),
+    // });
+
+    const response = {
+      success: true,
+      unit: {
+        _id: unit._id.toString(),
+        unitName: unit.unitName,
+        description: unit.description,
+        unitHead: unit.unitHead
+          ? {
+              _id: unit.unitHead._id.toString(),
+              userName: unit.unitHead.userName || "",
+              email: unit.unitHead.email || "",
+            }
+          : undefined,
+        totalMembers: unit.members?.length || 0,
+        members: unit.members ? unit.members.map((m) => m._id.toString()) : [],
+        unitLogo: Array.isArray(unit.unitLogo)
+          ? unit.unitLogo.map((img) => ({
+              url: img.url || "",
+              uri: img.uri || img.url || "",
+              cld_id: img.cld_id || "default",
+              type: img.type || "image",
+            }))
+          : [],
+        departments: unit.departments
+          ? unit.departments.map((d) => ({
+              _id: d._id.toString(),
+              name: d.name,
+              description: d.description,
+              unit: d.unit.toString(),
+              members: d.members ? d.members.map((m) => m._id.toString()) : [],
+            }))
+          : [],
+        church: unit.church.toString(),
+        isActive: unit.isActive,
+      },
+    };
+
+    // console.log("Server: Unit response:", {
+    //   unitName: response.unit.unitName,
+    //   members: response.unit.members,
+    //   departments: response.unit.departments,
+    // });
+
+    res.status(200).json(response);
+  } catch (error) {
+    console.error("Server: Error fetching unit:", error);
+    res.status(500).json({ success: false, message: "Server error while fetching unit" });
+  }
+};
 
 // Remove unit member
 // @desc    Remove a unit member
@@ -414,15 +446,11 @@ const removeUnitMember = asyncHandler(async (req, res) => {
 
 
 module.exports = {
-    getUnits,
+    getAllUnits,
     getUnit,
-    createUnit,
-    updateUnit,
-    deleteUnit,
     joinUnit,
     leaveUnit,
     getUnitMembers,
-    addUnitMember,
     removeUnitMember,
     requestToJoinUnit,
     approveUnitMember

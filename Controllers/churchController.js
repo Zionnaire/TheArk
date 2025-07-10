@@ -1,3 +1,4 @@
+const mongoose = require('mongoose')
 const Church = require('../Models/churchesAdmin');
 const Unit = require('../Models/unit'); 
 const User = require('../Models/user');
@@ -133,29 +134,27 @@ const loginChurch = async (req, res) => {
         // Check if church exists
         const church = await Church.findOne({ churchEmail: churchEmail });
         if (!church) {
-            console.log(`[Login] Attempt for non-existent email: ${churchEmail}`);
+           
             // For security, it's often better to give a generic message
             return res.status(400).json({ message: 'Invalid church email or password' });
         }
 
-        console.log('--- Debugging Password Comparison in loginChurch ---');
-        console.log('1. Password from request (frontend input):', password);
-                console.log('2. Hashed password from Database (church.password):', church.password); 
+       
       
         // Check if password is correct using the schema method
         const isPasswordCorrect = await church.matchPassword(password); // <-- UPDATED LINE
-        console.log('2. church.matchPassword result:', isPasswordCorrect);
+      
 
         if (!isPasswordCorrect) {
-            console.log('Password comparison failed. Returning 400: Invalid church password.');
+          
             return res.status(400).json({ message: 'Invalid church email or password' }); // Generic message for security
         }
 
-        console.log('Password comparison succeeded. Proceeding with login flow.');
+     
 
         // Check if email is verified
         if (!church.isEmailVerified) {
-            console.log(`[Login] Email not verified for church: ${churchEmail}`);
+           
             return res.status(400).json({ message: 'Email not verified. Please verify your email to log in.' });
         }
 
@@ -178,7 +177,7 @@ const loginChurch = async (req, res) => {
             refreshTokenDocument.token = refreshTokenString;
             refreshTokenDocument.expiresAt = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000); // 7 days
             await refreshTokenDocument.save();
-            console.log(`[Login] Updated existing refresh token for church: ${church._id}`);
+            // console.log(`[Login] Updated existing refresh token for church: ${church._id}`);
         } else {
             // Create new token
             refreshTokenDocument = await RefreshToken.create({
@@ -186,7 +185,7 @@ const loginChurch = async (req, res) => {
                 token: refreshTokenString,
                 expiresAt: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000), // 7 days
             });
-            console.log(`[Login] Created new refresh token for church: ${church._id}`);
+            // console.log(`[Login] Created new refresh token for church: ${church._id}`);
         }
 
         // Respond with success
@@ -266,11 +265,7 @@ const getChurchById = async (req, res) => {
         res.status(500).json({ message: 'Internal server error' });
     }
 }
-/**
- * @desc Get authenticated church's profile
- * @route GET /api/v1/churches/profile
- * @access Private (Church Admin)
- */
+
 const getChurchProfile = async (req, res) => {
   try {
     // 🛡️ Guard: Check authentication
@@ -280,13 +275,8 @@ const getChurchProfile = async (req, res) => {
     }
 
     let churchId;
-console.log("📌 Church ID used:", churchId);
-console.log("👤 req.user:", req.user);
 
 if (req.user.role === 'churchAdmin') {
-  console.log("📌 Church ID used:", churchId);
-console.log("👤 req.user:", req.user);
-
   churchId = req.user._id; // church IS the user
 } else {
   churchId = req.user.churchId;
@@ -338,11 +328,6 @@ if (!churchId) {
   }
 };
 
-/**
- * @desc Update authenticated church's profile
- * @route PUT /api/v1/churches/profile
- * @access Private (Church Admin)
- */
 const updateChurchProfile = async (req, res) => {
   try {
     const churchId = req.user.churchId || req.user._id;
@@ -452,22 +437,147 @@ const updateChurchProfile = async (req, res) => {
 };
 
 // Create controller for churchAdmin creating unit or units
-const createUnit = async (req, res) => {
+const createUnit = asyncHandler(async (req, res) => {
   try {
-    const { unitName, description, unitHeadId } = req.body;
+    const { unitName, description, unitHead: unitHeadStr } = req.body;
     const { role, churchId, isChurchAdmin } = req.user;
 
-    if (!isChurchAdmin || role !== 'churchAdmin') {
+    if (!isChurchAdmin || role !== "churchAdmin") {
+      console.error("unitController: Unauthorized attempt", { userId: req.user._id, role, isChurchAdmin });
       return res.status(403).json({ message: "Unauthorized: Only Church Admins can create units" });
     }
 
     const church = await Church.findById(churchId);
     if (!church) {
-      return res.status(404).json({ message: "Church not found" });
+      console.error("unitController: Church not found", { churchId });
+      return res.status(404).json({ message: "Church not found", churchId });
     }
 
-    // 🚀 Handle unit logo upload (object, not array)
+    if (!unitHeadStr) {
+      console.error("unitController: Unit head is required", { unitName, churchId });
+      return res.status(400).json({ message: "Unit head is required" });
+    }
+
+    let unitHeadData;
+    try {
+      unitHeadData = JSON.parse(unitHeadStr);
+      // console.log("unitController: Parsed unitHead:", unitHeadData);
+    } catch (error) {
+      console.error("unitController: Invalid unitHead format", { unitHeadStr, error: error.message });
+      return res.status(400).json({ message: "Invalid unitHead format" });
+    }
+
+    if (!mongoose.Types.ObjectId.isValid(unitHeadData._id)) {
+      console.error("unitController: Invalid unit head ID", { unitHeadId: unitHeadData._id });
+      return res.status(400).json({ message: "Invalid unit head ID" });
+    }
+
+    const alreadyHead = await Unit.findOne({ "unitHead._id": unitHeadData._id });
+    if (alreadyHead) {
+      console.error("unitController: User is already unit head", { unitHeadId: unitHeadData._id, existingUnit: alreadyHead._id });
+      return res.status(400).json({ message: "User is already unit head in another unit" });
+    }
+
+    const user = await User.findById(unitHeadData._id);
+    if (!user) {
+      console.error("unitController: Unit head user not found", { unitHeadId: unitHeadData._id });
+      return res.status(404).json({ message: "Unit head user not found", unitHeadId: unitHeadData._id });
+    }
+
+    const isInChurch = user.churchesJoined.some((id) => id.toString() === churchId.toString());
+    if (!isInChurch) {
+      console.error("unitController: User is not part of this church", { unitHeadId: unitHeadData._id, churchId });
+      return res.status(400).json({ message: "User is not part of this church" });
+    }
+
+    const unitHead = {
+      _id: user._id.toString(),
+      userName: unitHeadData.userName || user.userName || user.firstName || user.lastName || "Unit Head",
+      email: unitHeadData.email || user.email || "placeholder@example.com",
+    };
+
     let unitLogo = null;
+    if (req.files && req.files.unitLogo) {
+      const file = Array.isArray(req.files.unitLogo)
+        ? req.files.unitLogo[0]
+        : req.files.unitLogo;
+
+      if (!file.mimetype.startsWith("image/")) {
+        console.error("unitController: Invalid file type for unit logo", { mimetype: file.mimetype });
+        return res.status(400).json({ message: "Only image files are allowed for unit logo." });
+      }
+
+      const fileBuffer = file.data || file.buffer;
+      if (fileBuffer) {
+        const result = await uploadToCloudinary(fileBuffer, "unit-logos/");
+        unitLogo = {
+          url: result.secure_url,
+          cld_id: result.public_id,
+        };
+      }
+    }
+
+    const unit = await Unit.create({
+      unitName: unitName || "Unnamed Unit",
+      description: description || "No description yet",
+      unitLogo: unitLogo ? [unitLogo] : [],
+      church: church._id,
+      unitHead,
+    });
+
+    user.isUnitHead = true;
+    user.role = "unitHead";
+    if (!user.assignedUnits.includes(unit._id)) {
+      user.assignedUnits.push(unit._id);
+    }
+    user.isEmailVerified = user.isEmailVerified ?? true;
+    try {
+      await user.save({ validateBeforeSave: false });
+      // console.log("unitController: Successfully updated unit head", { unitHeadId: unitHead._id, unitId: unit._id, userRole: user.role });
+    } catch (error) {
+      console.error("unitController: Failed to update unit head", { unitHeadId: unitHead._id, error: error.message });
+      await Unit.deleteOne({ _id: unit._id });
+      return res.status(500).json({ message: "Failed to update unit head role", error: error.message });
+    }
+
+    church.units.push(unit._id);
+    await church.save({ validateBeforeSave: false });
+
+    const populatedUnit = await Unit.findById(unit._id)
+      .populate("departments", "name")
+      .populate("members.userId", "name userName firstName lastName userImage")
+      .lean();
+
+    res.status(201).json({
+      message: "Unit created successfully",
+      unit: populatedUnit,
+    });
+  } catch (error) {
+    console.error("unitController: Error creating unit:", error.message);
+    res.status(500).json({ message: "Internal server error", error: error.message });
+  }
+});
+
+const updateUnit = asyncHandler(async (req, res) => {
+  try {
+    const { unitId } = req.params;
+    const { unitName, description, unitHead: unitHeadStr } = req.body;
+    const { role, churchId, isChurchAdmin } = req.user;
+
+    if (!isChurchAdmin || role !== "churchAdmin") {
+      return res.status(403).json({ message: "Unauthorized: Only Church Admins can update units" });
+    }
+
+    const unit = await Unit.findById(unitId);
+    if (!unit) {
+      return res.status(404).json({ message: "Unit not found" });
+    }
+
+    if (unit.church.toString() !== churchId) {
+      return res.status(403).json({ message: "Unit does not belong to your church" });
+    }
+
+    let unitLogo = unit.unitLogo;
     if (req.files && req.files.unitLogo) {
       const file = Array.isArray(req.files.unitLogo)
         ? req.files.unitLogo[0]
@@ -480,140 +590,100 @@ const createUnit = async (req, res) => {
       const fileBuffer = file.data || file.buffer;
       if (fileBuffer) {
         const result = await uploadToCloudinary(fileBuffer, "unit-logos/");
-        unitLogo = {
+        unitLogo = [{
           url: result.secure_url,
-          cld_id: result.public_id
+          cld_id: result.public_id,
+        }];
+      }
+    }
+
+    let unitHead = unit.unitHead;
+    if (unitHeadStr !== undefined) {
+      if (unitHeadStr === "") {
+        unitHead = null;
+      } else {
+        let unitHeadData;
+        try {
+          unitHeadData = JSON.parse(unitHeadStr);
+        } catch (error) {
+          return res.status(400).json({ message: "Invalid unitHead format" });
+        }
+
+        if (!mongoose.Types.ObjectId.isValid(unitHeadData._id)) {
+          return res.status(400).json({ message: "Invalid unit head ID" });
+        }
+
+        const alreadyHead = await Unit.findOne({
+          "unitHead._id": unitHeadData._id,
+          _id: { $ne: unitId },
+        });
+        if (alreadyHead) {
+          return res.status(400).json({ message: "User is already unit head in another unit" });
+        }
+
+        const user = await User.findById(unitHeadData._id);
+        if (!user) {
+          return res.status(404).json({ message: "Unit head user not found" });
+        }
+
+        const isInChurch = user.churchesJoined.some((id) => id.toString() === churchId.toString());
+        if (!isInChurch) {
+          return res.status(400).json({ message: "User is not part of this church" });
+        }
+
+        unitHead = {
+          _id: user._id.toString(),
+          userName: unitHeadData.userName || user.userName || user.firstName || user.lastName || "Unit Head",
+          email: unitHeadData.email || user.email,
         };
       }
     }
 
-    // 🔍 Prevent unitHead duplications
-    if (unitHeadId) {
-      const alreadyHead = await Unit.findOne({ unitHead: unitHeadId });
-      if (alreadyHead) {
-        return res.status(400).json({ message: "User is already unit head in another unit" });
-      }
-    }
-
-    // 🏗️ Create unit
-    const unit = await Unit.create({
-      unitName: unitName || "Unnamed Unit",
-      description: description || "No description yet",
-      unitLogo: unitLogo,
-      church: church._id,
-    });
-
-    // 👑 Assign unit head if provided
-    if (unitHeadId) {
-      const user = await User.findById(unitHeadId);
-      if (!user) {
-        return res.status(404).json({ message: "Unit head user not found" });
-      }
-
-      const isInChurch = user.churchesJoined.some(id => id.toString() === churchId.toString());
-      if (!isInChurch) {
-        return res.status(400).json({ message: "User is not part of this church" });
-      }
-
-      unit.unitHead = user._id;
-      await unit.save();
-
-      user.isUnitHead = true;
-      user.role = 'unitHead';
-      if (!user.assignedUnits.includes(unit._id)) {
-        user.assignedUnits.push(unit._id);
-      }
-      await user.save();
-    }
-
-    church.units.push(unit._id);
-    await church.save();
-
-  const populatedUnit = await Unit.findById(unit._id)
-  .populate('departments', 'name')
-  .populate('members', 'name userName firstName lastName userImage')
-  .populate('unitHead', 'userName firstName lastName userImage')
-  .lean(); 
-
-console.log('Unit with logos:', populatedUnit);
-
-    res.status(201).json({
-      message: "Unit created successfully",
-      unit: populatedUnit,
-    });
-
-  } catch (error) {
-    console.error("Error creating unit:", error);
-    res.status(500).json({ message: "Internal server error" });
-  }
-};
-
-
-const updateUnit = async (req, res) => {
-  try {
-    const { unitId } = req.params;
-    const { role, isChurchAdmin, churchId } = req.user;
-
-    if (!isChurchAdmin || role !== "churchAdmin") {
-      return res.status(403).json({ message: "Unauthorized: Church Admin only" });
-    }
-
-    // 🔍 Find the unit belonging to this church
-    const unit = await Unit.findOne({ _id: unitId, church: churchId });
-    if (!unit) {
-      return res.status(404).json({ message: "Unit not found or does not belong to this church" });
-    }
-
-    // 🖼️ Handle unitLogo upload if provided
-    if (req.files && req.files.unitLogo) {
-      const file = Array.isArray(req.files.unitLogo)
-        ? req.files.unitLogo[0]
-        : req.files.unitLogo;
-
-      if (!file.mimetype.startsWith("image/")) {
-        return res.status(400).json({ message: "Only image files are allowed for unit logo." });
-      }
-
-      const fileBuffer = file.data || file.buffer;
-
-      // ❌ Delete previous logo from Cloudinary if exists
-      if (unit.unitLogo?.cld_id) {
-        await deleteFromCloudinary(unit.unitLogo.cld_id);
-      }
-
-      // ☁️ Upload new logo
-      const result = await uploadToCloudinary(fileBuffer, "unit-logos/");
-      unit.unitLogo = {
-        url: result.secure_url,
-        cld_id: result.public_id,
-      };
-    }
-
-    // 🛠️ Update other fields from body
-    const updatableFields = ['unitName', 'description'];
-    updatableFields.forEach(field => {
-      if (req.body[field] !== undefined) {
-        unit[field] = req.body[field];
-      }
-    });
+    unit.unitName = unitName || unit.unitName;
+    unit.description = description || unit.description;
+    unit.unitLogo = unitLogo;
+    unit.unitHead = unitHead;
 
     await unit.save();
 
-    const updatedUnit = await Unit.findById(unit._id)
-      .populate('unitHead', 'userName firstName lastName')
-      .populate('departments', 'name')
-      .populate('members', 'userName firstName lastName');
+    if (unitHeadStr !== undefined) {
+      if (unit.unitHead) {
+        const user = await User.findById(unit.unitHead._id);
+        if (user) {
+          user.isUnitHead = true;
+          user.role = "unitHead";
+          if (!user.assignedUnits.includes(unit._id)) {
+            user.assignedUnits.push(unit._id);
+          }
+          await user.save();
+        }
+      } else if (unit.unitHead) {
+        const previousUser = await User.findById(unit.unitHead._id);
+        if (previousUser) {
+          previousUser.isUnitHead = false;
+          previousUser.role = "member";
+          previousUser.assignedUnits = previousUser.assignedUnits.filter(
+            (id) => id.toString() !== unit._id.toString()
+          );
+          await previousUser.save();
+        }
+      }
+    }
+
+    const populatedUnit = await Unit.findById(unit._id)
+      .populate("departments", "name")
+      .populate("members.userId", "name userName firstName lastName userImage")
+      .lean();
 
     res.status(200).json({
       message: "Unit updated successfully",
-      unit: updatedUnit,
+      unit: populatedUnit,
     });
-
   } catch (error) {
-    console.error("Error updating unit:", error);
+    console.error("unitController: Error updating unit:", error);
     res.status(500).json({ message: "Internal server error" });
   }
-};
+});
 
 // Assign a user the role of unitHead
 const assignUnitHead = async (req, res) => {
