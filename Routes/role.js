@@ -1,5 +1,6 @@
 
 const express = require('express');
+const roleRouter = express.Router();
 
 const {
     getAllRoles,
@@ -8,9 +9,8 @@ const {
     updateRole,
     deleteRole
 } = require('../Controllers/roleController');
-// const { authenticateToken } = require('../Middlewares/authAccess');
+
 const {verifyToken} = require('../Middlewares/jwt');
-const roleRouter = express.Router();
 
 // Get all roles
 roleRouter.get('/', verifyToken, getAllRoles);

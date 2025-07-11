@@ -2,7 +2,7 @@
 const User = require('../Models/user');
 const Church = require('../Models/churchesAdmin');
 
-exports.validateToken = async (req, res) => {
+const validateToken = async (req, res) => {
   try {
     // Your JWT verification middleware should have already populated req.user (or req.authEntity)
     // with the _id and role from the token payload.
@@ -14,7 +14,7 @@ exports.validateToken = async (req, res) => {
     }
 
     let entity;
-    if (role === 'member') {
+    if (role === 'member' || role === 'unitHead') {
       entity = await User.findById(_id).select('-password'); // Fetch user, exclude password
     } else if (role === 'churchAdmin') {
       entity = await Church.findById(_id).select('-password'); // Fetch church, exclude password (if applicable)
@@ -41,3 +41,5 @@ exports.validateToken = async (req, res) => {
     res.status(500).json({ message: "Server error during token validation." });
   }
 };
+
+module.exports = {validateToken}

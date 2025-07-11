@@ -6,7 +6,7 @@ const bcrypt = require('bcryptjs');
 const jwt = require('../Middlewares/jwt');
 const { sendVerificationEmail } = require('../Middlewares/emailVerification');
 const logger = require('../Middlewares/logger');
-const { uploadToCloudinary } = require('../Middlewares/cloudinaryUpload');
+const { uploadToCloudinary, deleteFromCloudinary,  } = require('../Middlewares/cloudinaryUpload');
 const asyncHandler = require('express-async-handler');
 const role = require('../Models/role');
 const RefreshToken = require('../Models/refreshToken');
@@ -384,27 +384,33 @@ const updateChurchProfile = async (req, res) => {
       return res.status(400).json({ message: 'Both password and confirm password are required.' });
     }
 
-    // Handle churchLogo file upload
+    // Image upload, matching updateProfile logic
     if (req.files && req.files.churchLogo) {
-      const file = req.files.churchLogo;
-      const base64Image = `data:${file.mimetype};base64,${file.data.toString("base64")}`;
+      const file = Array.isArray(req.files.churchLogo)
+        ? req.files.churchLogo[0]
+        : req.files.churchLogo;
 
-      if (church.churchLogo?.[0]?.cld_id) {
-        await cloudinary.uploader.destroy(church.churchLogo[0].cld_id);
+      if (!file.mimetype.startsWith("image/")) {
+        return res.status(400).json({ message: "Only image files are allowed." });
       }
 
-      const result = await uploadToCloudinary(base64Image, "church-logos/");
-      church.churchLogo = [{ url: result.secure_url, cld_id: result.public_id }];
+      const fileBuffer = file.data || file.buffer;
+      if (fileBuffer) {
+        if (church.churchLogo?.[0]?.cld_id) {
+          await deleteFromCloudinary(church.churchLogo[0].cld_id);
+        }
+        const result = await uploadToCloudinary(fileBuffer, "church-logos/");
+        church.churchLogo = [{ url: result.secure_url, cld_id: result.public_id }];
+      }
     } else if (req.body.clearChurchLogo === 'true') {
       if (church.churchLogo?.[0]?.cld_id) {
-        await cloudinary.uploader.destroy(church.churchLogo[0].cld_id);
+        await deleteFromCloudinary(church.churchLogo[0].cld_id);
       }
       church.churchLogo = [];
     }
 
     await church.save({ validateBeforeSave: false });
 
-    // 🔥 Fixed population paths
     const updatedChurch = await Church.findById(churchId)
       .select('-password -cPassword -verificationCode -verificationCodeExpire -resetPasswordToken -resetPasswordExpire -resetCode -resetCodeExpire')
       .populate({
