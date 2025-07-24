@@ -16,12 +16,10 @@ const {verifyToken} = require('../Middlewares/jwt');
 
 const unitRouter = express.Router();
 
-unitRouter.post('/request', requestToJoinUnit)
-unitRouter.put('/approveRequest', verifyToken, approveUnitMember)
 // Route to join a unit
-unitRouter.post('/join/:id', verifyToken, joinUnit);
+unitRouter.post('/join/:unitId', verifyToken, joinUnit);
 // Route to leave a unit    
-unitRouter.post('/leave/:id', verifyToken, leaveUnit);
+unitRouter.post('/leave/:unitId', verifyToken, leaveUnit);
 // Route to get all units
 unitRouter.get('/', verifyToken, getAllUnits);
 // Route to get a single unit

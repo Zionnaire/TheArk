@@ -4,7 +4,6 @@ const chatSchema = new mongoose.Schema({
   chatType: {
     type: String,
     enum: ['private', 'unit', 'department', 'general'],
-    required: true,
     index: true
   },
   participants: [{
@@ -24,10 +23,8 @@ const chatSchema = new mongoose.Schema({
   },
   department: {
     type: mongoose.Schema.Types.ObjectId,
-    ref: 'DepartmentChat',
-    required: function() { return this.chatType === 'department'; }
+    ref: 'Department', // Changed from DepartmentChat to Department
   },
-
   generalChatRef: {
     type: mongoose.Schema.Types.ObjectId,
     ref: 'GeneralChat',

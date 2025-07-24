@@ -7,12 +7,17 @@ const {
   DepartmentChat,
   GeneralChat,
 } = require("../Models/chat"); 
-
 const Unit = require("../Models/unit");
 const User = require("../Models/user");
 const Department = require("../Models/departments");
 const Notification = require("../Models/notification");
 const Post = require("../Models/post");
+
+/**
+ * 
+  Okay...I think the best way to maintain a good app is to send messages or posts through Socket and not calling HTTP all the time...If you think this is the best approach to this live messaging, I would like to implement it with full cache...So maybe we should start from the backend and work it up to the frontend...So tell me what you need from from the Backend 
+ * 
+ */
 
 const {
   uploadToCloudinary,
@@ -216,8 +221,7 @@ const createPrivateChat = async (req, res) => {
 
 const getCombinedChatlist = async (req, res) => {
     try {
-        const userId = req.user._id; // User ID from authentication middleware
-
+        const userId = req.user._id;
         if (!userId) {
             return res.status(401).json({ message: 'Unauthorized - User ID not found in request' });
         }
@@ -252,7 +256,7 @@ const getCombinedChatlist = async (req, res) => {
             })
             .populate({
                 path: 'department', // Populate Department details if chatType is 'department'
-                select: 'name' // Get the name of the department
+                select: 'deptName' // Get the name of the department
             })
             // You might need to populate 'lastMessage' itself if you want more details than text/sender
              .populate({
@@ -297,7 +301,7 @@ const getCombinedChatlist = async (req, res) => {
                     // chatImage = chat.unit?.image || ''; // If Unit model has an image
                     break;
                 case 'department':
-                    chatName = chat.department?.name || 'Department Chat'; // Name from populated Department model
+                    chatName = chat.department?.deptName || 'Department Chat'; // Name from populated Department model
                     // chatImage = chat.department?.image || ''; // If Department model has an image
                     break;
                 case 'general':
@@ -345,7 +349,7 @@ const sendMessage = async (req, res) => {
         const { chatType, recipientId: targetId } = req.params;
         const { message = "", reactions = "[]", tempId, replyTo } = req.body;
         const senderId = req.user._id;
-        const senderDetails = req.user; // Assuming req.user is already populated by your auth middleware
+        const senderDetails = req.user;
 
         const allowedTypes = ["private", "unit", "department", "general"];
         if (!chatType || !allowedTypes.includes(chatType)) {
@@ -429,7 +433,7 @@ const sendMessage = async (req, res) => {
                 });
 
                 if (!genericChatDocument) {
-                    console.warn(`Generic private chat not found for sender ${senderId} and recipient ${targetId}. Attempting to create it.`);
+                    console.log(`Creating new private chat for sender ${senderId} and recipient ${targetId}.`);
                     const privateChatIdentifier = `${sortedParticipantIds[0]}_${sortedParticipantIds[1]}`;
                     const newPrivateChatRef = await new PrivateChat({
                         chatId: privateChatIdentifier,
@@ -459,28 +463,54 @@ const sendMessage = async (req, res) => {
                 if (!mongoose.Types.ObjectId.isValid(targetId)) {
                     return res.status(400).json({ message: "Invalid unit ID." });
                 }
-                const unit = await Unit.findById(targetId);
+                const unit = await Unit.findById(targetId).select('members name');
                 if (!unit) {
                     return res.status(404).json({ message: "Unit not found." });
                 }
+                if (!unit.members.some(member => member.toString() === senderId.toString())) {
+                    return res.status(403).json({ message: "You are not a member of this unit." });
+                }
                 genericChatDocument = await Chat.findOne({ chatType: 'unit', unitChatRef: targetId });
                 if (!genericChatDocument) {
-                    return res.status(404).json({ message: "Unit chat not found in generic chats." });
+                    console.log(`Creating new unit chat for unit ${targetId}.`);
+                    genericChatDocument = await new Chat({
+                        chatType: 'unit',
+                        unitChatRef: targetId,
+                        participants: unit.members,
+                        unreadCounts: unit.members.map(member => ({ user: member, count: 0 }))
+                    }).save();
                 }
                 chatRoomId = genericChatDocument._id.toString();
                 break;
 
             case "department":
                 if (!mongoose.Types.ObjectId.isValid(targetId)) {
-                    return res.status(400).json({ message: "Invalid department ID." });
+                    return res.status(400).json({ message: "Invalid chat ID." });
                 }
-                const department = await Department.findById(targetId);
+                // Query department by chatId instead of _id
+                const department = await Department.findOne({ chatId: targetId }).select('members name unit');
                 if (!department) {
+                    console.warn(`[sendMessage] Department not found for chatId: ${targetId}`);
                     return res.status(404).json({ message: "Department not found." });
                 }
-                genericChatDocument = await Chat.findOne({ chatType: 'department', departmentChatRef: targetId });
+                if (!department.members.some(member => member.toString() === senderId.toString())) {
+                    return res.status(403).json({ message: "You are not a member of this department." });
+                }
+                // Optional: Validate unit membership
+                const unitDoc = await Unit.findById(department.unit).select('members');
+                if (!unitDoc || !unitDoc.members.some(member => member.toString() === senderId.toString())) {
+                    console.warn(`[sendMessage] User ${senderId} not in unit ${department.unit} for department ${department._id}`);
+                    return res.status(403).json({ message: "You are not a member of the unit." });
+                }
+                genericChatDocument = await Chat.findOne({ chatType: 'department', departmentChatRef: department._id });
                 if (!genericChatDocument) {
-                    return res.status(404).json({ message: "Department chat not found in generic chats." });
+                    console.log(`Creating new department chat for department ${department._id}.`);
+                    genericChatDocument = await new Chat({
+                        chatType: 'department',
+                        departmentChatRef: department._id,
+                        participants: department.members,
+                        unreadCounts: department.members.map(member => ({ user: member, count: 0 }))
+                    }).save();
                 }
                 chatRoomId = genericChatDocument._id.toString();
                 break;
@@ -488,7 +518,7 @@ const sendMessage = async (req, res) => {
             case "general":
                 genericChatDocument = await Chat.findOne({ chatType: 'general' });
                 if (!genericChatDocument) {
-                    console.warn("General chat document not found. Creating it.");
+                    console.log("Creating new general chat.");
                     const newGeneralChatRef = await new GeneralChat({ chatId: "general_chat" }).save();
                     genericChatDocument = await new Chat({
                         chatType: 'general',
@@ -528,8 +558,8 @@ const sendMessage = async (req, res) => {
 
         const newMessage = new Message({
             chat: genericChatDocument._id,
-            sender: senderId, // This is still the ObjectId string initially
-            messageText: message.trim(),
+            sender: senderId,
+            messageText: message.trim() || "",
             attachments: uploadedAttachments,
             reactions: parsedReactions,
             contentType: uploadedAttachments.length > 0 ? (uploadedAttachments[0].type.startsWith("image") ? "image" : (uploadedAttachments[0].type.startsWith("video") ? "video" : "file")) : (message.trim() ? "text" : "reaction_only"),
@@ -537,19 +567,19 @@ const sendMessage = async (req, res) => {
         });
 
         const savedMessage = await newMessage.save();
-        // console.log("Message saved to database with _id:", savedMessage._id);
+        console.log(`Message saved: _id=${savedMessage._id}, chatType=${chatType}, chatRoomId=${chatRoomId}`);
 
-        // --- CRITICAL CHANGE: POPULATE THE SENDER ON THE SAVED MESSAGE ---
         const populatedSavedMessage = await Message.findById(savedMessage._id)
             .populate("sender", "userName firstName lastName userImage")
             .populate({
                 path: 'replyTo',
                 select: 'messageText sender',
-                populate: { path: 'sender', select: 'userName firstName lastName' } // Populate sender of replyTo message
+                populate: { path: 'sender', select: 'userName firstName lastName' }
             })
-            .lean(); // Use .lean() for plain JavaScript objects, good for performance for emits
+            .lean();
 
-        // 3. Update the generic Chat document (last message details and unread counts)
+        populatedSavedMessage.messageText = populatedSavedMessage.messageText || "";
+
         const chatBeforeUpdate = await Chat.findById(genericChatDocument._id).lean();
 
         const updatedUnreadCounts = chatBeforeUpdate.unreadCounts.map(uc => {
@@ -563,25 +593,19 @@ const sendMessage = async (req, res) => {
             genericChatDocument._id,
             {
                 lastMessageText: savedMessage.messageText || (savedMessage.attachments.length > 0 ? `Attachment (${savedMessage.attachments[0].name})` : (savedMessage.replyTo ? 'Replied to a message' : 'System message')),
-                lastMessageSender: savedMessage.sender, // This is still the ObjectId, which is fine here
+                lastMessageSender: savedMessage.sender,
                 lastMessageAt: savedMessage.createdAt,
                 unreadCounts: updatedUnreadCounts,
             },
             { new: true }
         );
-        // console.log("Generic Chat document updated with last message and unread counts.");
 
-        // 4. Send real-time updates via Socket.io
         const io = req.app.get('io');
         if (io) {
-            // Use the fully populated message for emissions
             const messageToEmit = {
-                ...populatedSavedMessage, // This now contains the populated sender object
-                // Explicitly ensure chat and _id are strings for consistency with client interfaces
+                ...populatedSavedMessage,
                 chat: populatedSavedMessage.chat.toString(),
                 _id: populatedSavedMessage._id.toString(),
-                // Remove the custom `senderDetails` as `sender` is now correctly populated
-                senderDetails: undefined,
             };
 
             const roomSockets = io.sockets.adapter.rooms.get(chatRoomId);
@@ -591,33 +615,29 @@ const sendMessage = async (req, res) => {
             }
 
             if (roomSockets) {
-                // 1. Broadcast 'receiveMessage' to all clients in the room EXCEPT the sender's sockets
                 for (const socketId of roomSockets) {
                     if (!senderTargetSockets.has(socketId)) {
                         io.to(socketId).emit('receiveMessage', messageToEmit);
-                        // console.log(`[ChatController] Emitted 'receiveMessage' to socket ${socketId} in room ${chatRoomId}`);
+                        console.log(`Emitted 'receiveMessage' to socket ${socketId} in room ${chatRoomId}`);
                     }
                 }
             } else {
-                console.warn(`[ChatController] Room ${chatRoomId} has no active sockets for 'receiveMessage' broadcast.`);
+                console.warn(`Room ${chatRoomId} has no active sockets for 'receiveMessage' broadcast.`);
             }
 
-            // 2. Send 'messageSentConfirmation' ONLY to the sender's sockets
             const confirmedMessageToSender = {
-                ...messageToEmit, // Use the same populated message
-                tempId: tempId, // CRITICAL: This is the tempId from the sender's request
-                isOptimistic: undefined, // Explicitly remove optimistic flag
-                senderDetails: undefined, // Again, omit this as `sender` is now correct
+                ...messageToEmit,
+                tempId: tempId,
+                isOptimistic: undefined,
             };
 
             if (senderTargetSockets.size > 0) {
                 io.to([...senderTargetSockets]).emit('messageSentConfirmation', confirmedMessageToSender);
-                // console.log(`[ChatController] Emitted 'messageSentConfirmation' to sender's sockets for tempId: ${tempId}`);
+                console.log(`Emitted 'messageSentConfirmation' to sender sockets for tempId: ${tempId}`);
             } else {
-                console.warn(`[ChatController] No active sockets found for sender ${senderId} for 'messageSentConfirmation'.`);
+                console.warn(`No active sockets for sender ${senderId} for 'messageSentConfirmation'.`);
             }
 
-            // --- Notification Logic ---
             for (const participantId of actualChatParticipants) {
                 if (participantId.toString() === senderId.toString()) {
                     continue;
@@ -645,7 +665,6 @@ const sendMessage = async (req, res) => {
                         read: false,
                     });
                     await newNotification.save();
-                    // console.log(`Notification created for user ${participantId} for message ${savedMessage._id}`);
 
                     const populatedNotification = await Notification.findById(newNotification._id)
                         .populate('sender', 'userName firstName lastName userImage')
@@ -678,8 +697,6 @@ const sendMessage = async (req, res) => {
                                 contextName = populatedNotification.chat.department?.name || 'Department Chat';
                                 break;
                             case 'general':
-                                // This line looks incorrect: populatedNotification.Chat.generalChatRef?.name
-                                // It should be populatedNotification.chat.generalChatRef?.name assuming 'chat' is the populated field.
                                 contextName = populatedNotification.chat.generalChatRef?.name || 'General Church Chat';
                                 break;
                         }
@@ -706,29 +723,21 @@ const sendMessage = async (req, res) => {
                             image: contextImage,
                         } : null,
                     };
-                    // console.log("userSocketMap snapshot:", [...io.userSocketMap.entries()]);
 
                     if (io.userSocketMap.has(participantId.toString())) {
-                        io.to(participantId.toString()).emit('newNotification', formattedNotification);
-                        // console.log(`Real-time 'newNotification' sent to user ${participantId}.`);
-                    } else {
-                        // console.log(`User ${participantId} is offline. Notification saved to DB.`);
+                        io.to([...io.userSocketMap.get(participantId.toString())]).emit('newNotification', formattedNotification);
+                        console.log(`Sent 'newNotification' to user ${participantId}.`);
                     }
-                } else {
-                    // console.log(`User ${participantId} is in chat room ${chatRoomId}. No notification sent.`);
                 }
             }
         } else {
-            console.warn("[ChatController] req.io not available for emitting message or notifications.");
+            console.warn("Socket.IO not available for emitting messages or notifications.");
         }
 
-        // 5. Send HTTP response back to the client
         res.status(201).json({
             success: true,
             message: "Message sent successfully",
-            data: {
-                ...populatedSavedMessage, // Return the populated message in the HTTP response too
-            },
+            data: populatedSavedMessage,
             tempId: tempId
         });
 
@@ -742,99 +751,300 @@ const sendMessage = async (req, res) => {
     }
 };
 
-const getMessages = async (req, res) => {
-    try {
-        const { chatId } = req.params;
-        const currentUserId = req.user._id;
-        const { beforeId, limit: queryLimit } = req.query;
+const createDepartmentChat = async (req, res) => {
+  const { departmentId } = req.body;
+  const user = req.user;
 
-        // console.log(`[Backend] getMessages called for chatId: ${chatId}`);
-        // console.log(`[Backend] Query params: { beforeId: ${beforeId}, limit: ${queryLimit} }`);
+  console.log("chatController: createDepartmentChat request", {
+    userId: user?._id.toString(),
+    departmentId,
+  });
 
-        if (!mongoose.Types.ObjectId.isValid(chatId)) {
-            return res.status(400).json({ message: "Invalid chat ID format (must be a valid ObjectId)." });
-        }
+  if (!departmentId) {
+    console.log("chatController: Missing department ID", { departmentId });
+    return res.status(400).json({ success: false, message: "Department ID is required" });
+  }
 
-        const MAX_LIMIT = 50;
-        const limit = Math.min(parseInt(queryLimit || '20', 10), MAX_LIMIT);
+  if (!mongoose.Types.ObjectId.isValid(departmentId)) {
+    console.log("chatController: Invalid department ID", { departmentId });
+    return res.status(400).json({ success: false, message: "Invalid department ID" });
+  }
 
-        if (isNaN(limit) || limit <= 0) {
-            return res.status(400).json({ message: "Invalid limit provided." });
-        }
+  const session = await mongoose.startSession();
+  session.startTransaction();
 
-        const chat = await Chat.findById(chatId);
-        if (!chat || !chat.participants.some(p => p.equals(currentUserId))) {
-            return res.status(403).json({ message: "You are not authorized to view messages in this chat." });
-        }
+  try {
+    // Check if department exists and user is a member
+    const department = await Department.findOne({
+      _id: departmentId,
+      members: user._id,
+    }).session(session);
 
-        // Mark all received messages as read & reset unread count
-        await Promise.all([
-            Message.updateMany(
-                {
-                    chat: chatId,
-                    sender: { $ne: currentUserId },
-                    'readBy.user': { $ne: currentUserId },
-                },
-                { $addToSet: { readBy: { user: currentUserId, readAt: Date.now() } } }
-            ),
-            Chat.findOneAndUpdate(
-                { _id: chatId, 'unreadCounts.user': currentUserId },
-                { $set: { 'unreadCounts.$.count': 0 } },
-                { new: true }
-            )
-        ]);
-
-        // Build message filter
-        let filter = { chat: chatId };
-        if (beforeId && mongoose.Types.ObjectId.isValid(beforeId)) {
-            filter._id = { $lt: new mongoose.Types.ObjectId(beforeId) };
-            // console.log(`[Backend] Using _id filter: ${JSON.stringify(filter._id)}`);
-        } else if (beforeId) {
-            console.warn(`[Backend] Invalid beforeId received: ${beforeId}. Skipping _id filter.`);
-        } else {
-            // console.log(`[Backend] No beforeId provided. Fetching latest messages.`);
-        }
-
-        // Fetch messages + 1 extra to determine `hasMore`
-        const fetchedMessages = await Message.find(filter)
-            .sort({ createdAt: -1 })
-            .limit(limit + 1)
-            .populate("sender", "userName firstName lastName userImage")
-            .populate({
-                path: 'reactions.user',
-                select: 'userName firstName lastName'
-            })
-            .populate({
-                path: 'replyTo',
-                select: 'messageText sender',
-                populate: { path: 'sender', select: 'userName' }
-            })
-            .populate({
-                path: 'post',
-                populate: {
-                    path: 'user',
-                    select: 'userName firstName lastName userImage'
-                }
-            })
-            .lean(); // Performance boost for read-only queries
-
-        const hasMore = fetchedMessages.length > limit;
-        const messagesToReturn = fetchedMessages.slice(0, limit).reverse(); // Return oldest first
-
-        return res.status(200).json({
-            success: true,
-            messages: messagesToReturn,
-            hasMore,
-        });
-
-    } catch (error) {
-        console.error("Error retrieving messages:", error);
-        return res.status(500).json({
-            success: false,
-            message: "Internal server error retrieving messages.",
-            error: error.message
-        });
+    if (!department) {
+      console.log("chatController: Department not found or user not a member", {
+        departmentId,
+        userId: user._id.toString(),
+      });
+      await session.abortTransaction();
+      return res.status(404).json({ success: false, message: "Department not found or user not a member" });
     }
+
+    // Check if a chat already exists for the department
+    const existingChat = await Chat.findOne({
+      chatType: "department",
+      department: departmentId,
+    }).session(session);
+
+    if (existingChat) {
+      console.log("chatController: Chat already exists for department", {
+        departmentId,
+        chatId: existingChat._id.toString(),
+      });
+      await Department.updateOne(
+        { _id: departmentId },
+        { $set: { chatId: existingChat._id } },
+        { session }
+      );
+      await session.commitTransaction();
+      return res.status(200).json({
+        success: true,
+        chatId: existingChat._id.toString(),
+        message: "Chat already exists",
+      });
+    }
+
+    // Create new chat
+    const newChat = new Chat({
+      chatType: "department",
+      participants: [user._id],
+      department: departmentId, // Reference Department._id directly
+      name: `${department.deptName} Chat`,
+      description: `Chat room for ${department.deptName}`,
+      createdAt: new Date(),
+      unreadCounts: [{ user: user._id, count: 0 }],
+      unit: department.unit,
+    });
+    await newChat.save({ session });
+
+    // Update Department with chatId
+    await Department.updateOne(
+      { _id: departmentId },
+      { $set: { chatId: newChat._id } },
+      { session }
+    );
+
+    await session.commitTransaction();
+
+    console.log("chatController: Department chat created", {
+      departmentId,
+      chatId: newChat._id.toString(),
+    });
+
+    return res.status(201).json({
+      success: true,
+      chatId: newChat._id.toString(),
+      message: "Department chat created successfully",
+    });
+  } catch (error) {
+    await session.abortTransaction();
+    console.error("chatController: Error creating department chat", {
+      message: error.message,
+      stack: error.stack,
+    });
+    return res.status(500).json({
+      success: false,
+      message: "Failed to create department chat",
+      error: error.message,
+    });
+  } finally {
+    session.endSession();
+  }
+};
+
+// Get department chat
+const getDepartmentChat = async (req, res) => {
+  try {
+    const { departmentId } = req.params;
+    const currentUserId = req.user._id;
+
+    if (!mongoose.Types.ObjectId.isValid(departmentId)) {
+      console.log(`[Backend] Invalid departmentId format`, { departmentId });
+      return res.status(400).json({ message: "Invalid department ID format (must be a valid ObjectId)." });
+    }
+
+    const departmentChat = await Chat.findOne({ department: departmentId, chatType: "department" });
+    if (!departmentChat) {
+      console.log(`[Backend] Department chat not found`, { departmentId });
+      return res.status(404).json({ message: "Department chat not found." });
+    }
+
+    console.log(`[Backend] Department chat details`, {
+      departmentId,
+      chatId: departmentChat._id.toString(),
+      participants: departmentChat.participants.map(p => p.toString()),
+    });
+
+    return res.status(200).json({ success: true, chat: departmentChat });
+  } catch (error) {
+    console.error("chatController: Error fetching department chat", {
+      message: error.message,
+      stack: error.stack,
+    });
+    return res.status(500).json({
+      success: false,
+      message: "Failed to fetch department chat",
+      error: error.message,
+    });
+  }
+};
+
+const getMessages = async (req, res) => {
+  try {
+    const { chatId } = req.params;
+    const currentUserId = req.user._id;
+    const { beforeId, limit: queryLimit } = req.query;
+
+    console.log(`[Backend] getMessages called for chatId: ${chatId}`);
+    console.log(`[Backend] Query params: { beforeId: ${beforeId}, limit: ${queryLimit}, userId: ${currentUserId} }`);
+
+    if (!mongoose.Types.ObjectId.isValid(chatId)) {
+      console.log(`[Backend] Invalid chatId format`, { chatId });
+      return res.status(400).json({ message: "Invalid chat ID format (must be a valid ObjectId)." });
+    }
+
+    const MAX_LIMIT = 50;
+    const limit = Math.min(parseInt(queryLimit || '20', 10), MAX_LIMIT);
+
+    if (isNaN(limit) || limit <= 0) {
+      console.log(`[Backend] Invalid limit provided`, { queryLimit });
+      return res.status(400).json({ message: "Invalid limit provided." });
+    }
+
+    const chat = await Chat.findById(chatId);
+    if (!chat) {
+      console.log(`[Backend] Chat not found`, { chatId });
+      return res.status(404).json({ message: "Chat not found." });
+    }
+
+    console.log(`[Backend] Chat details`, {
+      chatId,
+      chatType: chat.chatType,
+      department: chat.department?.toString(),
+      participants: chat.participants.map(p => p.toString()),
+    });
+
+    // Validate membership for unit and department chats
+    if (chat.chatType === 'unit') {
+      const unitChat = await UnitChat.findById(chat.unit);
+      if (!unitChat) {
+        console.log(`[Backend] Unit chat reference not found`, { unitId: chat.unit });
+        return res.status(404).json({ message: "Unit chat reference not found." });
+      }
+      const unit = await Unit.findById(unitChat.unit);
+      if (!unit || (!unit.members.some(memberId => memberId.equals(currentUserId)) && !unit.unitHead.equals(currentUserId))) {
+        console.log(`[Backend] User not authorized for unit chat`, {
+          unitId: unitChat.unit,
+          userId: currentUserId.toString(),
+          isMember: unit?.members.some(memberId => memberId.equals(currentUserId)),
+          isUnitHead: unit?.unitHead.equals(currentUserId),
+        });
+        return res.status(403).json({ message: "You must be a unit member or head to view messages in this chat." });
+      }
+    } else if (chat.chatType === 'department') {
+      const department = await Department.findById(chat.department);
+      if (!department) {
+        console.log(`[Backend] Department not found`, { departmentId: chat.department });
+        return res.status(404).json({ message: "Department not found." });
+      }
+      if (!department.members.some(memberId => memberId.equals(currentUserId))) {
+        console.log(`[Backend] User not authorized for department chat`, {
+          departmentId: chat.department,
+          userId: currentUserId.toString(),
+          isMember: department.members.some(memberId => memberId.equals(currentUserId)),
+        });
+        return res.status(403).json({ message: "You must be a department member to view messages in this chat." });
+      }
+    } else if (chat.chatType === 'private' && !chat.participants.some(p => p.equals(currentUserId))) {
+      console.log(`[Backend] User not authorized for private chat`, {
+        chatId,
+        userId: currentUserId.toString(),
+        participants: chat.participants.map(p => p.toString()),
+      });
+      return res.status(403).json({ message: "You are not authorized to view messages in this chat." });
+    }
+
+    // Mark all received messages as read & reset unread count
+    await Promise.all([
+      Message.updateMany(
+        {
+          chat: chatId,
+          sender: { $ne: currentUserId },
+          'readBy.user': { $ne: currentUserId },
+        },
+        { $addToSet: { readBy: { user: currentUserId, readAt: Date.now() } } }
+      ),
+      Chat.findOneAndUpdate(
+        { _id: chatId, 'unreadCounts.user': currentUserId },
+        { $set: { 'unreadCounts.$.count': 0 } },
+        { new: true }
+      )
+    ]);
+
+    // Build message filter
+    let filter = { chat: chatId };
+    if (beforeId && mongoose.Types.ObjectId.isValid(beforeId)) {
+      filter._id = { $lt: new mongoose.Types.ObjectId(beforeId) };
+      console.log(`[Backend] Using _id filter: ${JSON.stringify(filter._id)}`);
+    } else if (beforeId) {
+      console.warn(`[Backend] Invalid beforeId received: ${beforeId}. Skipping _id filter.`);
+    } else {
+      console.log(`[Backend] No beforeId provided. Fetching latest messages.`);
+    }
+
+    // Fetch messages + 1 extra to determine `hasMore`
+    const fetchedMessages = await Message.find(filter)
+      .sort({ createdAt: -1 })
+      .limit(limit + 1)
+      .populate("sender", "userName firstName lastName userImage")
+      .populate({
+        path: 'reactions.user',
+        select: 'userName firstName lastName'
+      })
+      .populate({
+        path: 'replyTo',
+        select: 'messageText sender',
+        populate: { path: 'sender', select: 'userName' }
+      })
+      .populate({
+        path: 'post',
+        populate: {
+          path: 'user',
+          select: 'userName firstName lastName userImage'
+        }
+      })
+      .lean();
+
+    const hasMore = fetchedMessages.length > limit;
+    const messagesToReturn = fetchedMessages.slice(0, limit).reverse();
+
+    console.log(`[Backend] Messages fetched`, { chatId, messageCount: messagesToReturn.length, hasMore });
+
+    return res.status(200).json({
+      success: true,
+      messages: messagesToReturn,
+      hasMore,
+    });
+  } catch (error) {
+    console.error("[Backend] Error retrieving messages:", {
+      message: error.message,
+      stack: error.stack,
+    });
+    return res.status(500).json({
+      success: false,
+      message: "Internal server error retrieving messages.",
+      error: error.message
+    });
+  }
 };
 
 const deleteMessage = async (req, res) => {
@@ -1128,72 +1338,71 @@ const getNotifications = async (req, res) => {
   // GET /api/v1/private/:recipientId/exists
 
 
-  const getUnitChatList = async (req, res) => {
-    try {
-      const currentUser = req.user;
-      const unitId = currentUser.unitId;
+const getUnitChatList = async (req, res) => {
+  try {
+    const currentUser = req.user;
 
-      if (!unitId)
-        return res.status(400).json({ message: "User not assigned to a unit" });
-      console.log("This is the unit ID", unitId);
-
-      // Match correct schema field
-      const lastMessage = await UnitChat.findOne({ unit: unitId })
-        .sort({ createdAt: -1 })
-        .populate("senderId", "firstName lastName")
-        .lean();
-
-      const preview = lastMessage
-        ? {
-            id: unitId.toString(),
-            name: currentUser.unitName || "Your Unit",
-            lastMessage: lastMessage.message,
-            lastMessageTimestamp: lastMessage.createdAt,
-            type: "unit",
-          }
-        : null;
-
-      res.status(200).json(preview ? [preview] : []);
-    } catch (err) {
-      console.error("Error in getUnitChatList:", err);
-      res.status(500).json({ message: "Failed to fetch unit chats" });
+    // Get user's assigned units
+    const user = await User.findById(currentUser._id).populate('unitChats');
+    if (!user.unitChats || user.unitChats.length === 0) {
+      return res.status(200).json({ data: [], message: 'User not assigned to any unit chats' });
     }
-  };
 
-  const getDepartmentChatList = async (req, res) => {
-    try {
-      const currentUser = req.user;
-      const departmentId = currentUser.departmentId;
+    const chats = await Chat.find({ _id: { $in: user.unitChats }, chatType: 'unit' })
+      .populate('unit', 'unitName') // Populate unit name
+      .populate('lastMessageSender', 'userName firstName lastName')
+      .lean();
 
-      if (!departmentId)
-        return res
-          .status(400)
-          .json({ message: "User not assigned to a department" });
-      console.log("This is the department ID", departmentId);
+    const chatList = chats.map(chat => ({
+      id: chat._id.toString(),
+      name: chat.unit?.unitName || 'Unit Chat',
+      lastMessage: chat.lastMessageText || '',
+      lastMessageTimestamp: chat.lastMessageAt || chat.createdAt,
+      lastMessageSender: chat.lastMessageSender?.userName || chat.lastMessageSender?.firstName || 'N/A',
+      type: 'unit',
+      unitId: chat.unit?._id.toString(),
+      unreadCount: chat.unreadCounts.find(uc => uc.user.toString() === currentUser._id.toString())?.count || 0,
+    }));
 
-      const lastMessage = await DepartmentChat.findOne({
-        department: departmentId,
-      })
-        .sort({ createdAt: -1 })
-        .populate("senderId", "firstName lastName")
-        .lean();
+    res.status(200).json({ data: chatList });
+  } catch (err) {
+    console.error('Error in getUnitChatList:', err);
+    res.status(500).json({ message: 'Failed to fetch unit chats', error: err.message });
+  }
+};
 
-      const preview = lastMessage
-        ? {
-            id: departmentId.toString(),
-            name: currentUser.departmentName || "Your Department",
-            lastMessage: lastMessage.message,
-            lastMessageTimestamp: lastMessage.createdAt,
-            type: "department",
-          }
-        : null;
+const getDepartmentChatList = async (req, res) => {
+  try {
+    const currentUser = req.user;
 
-      res.status(200).json(preview ? [preview] : []);
-    } catch (err) {
-      console.error("Error in getDepartmentChatList:", err);
-      res.status(500).json({ message: "Failed to fetch department chats" });
+    // Get user's assigned departments
+    const user = await User.findById(currentUser._id).populate('departmentChats');
+    if (!user.departmentChats || user.departmentChats.length === 0) {
+      return res.status(200).json({ data: [], message: 'User not assigned to any department chats' });
     }
-  };
+
+    const chats = await Chat.find({ _id: { $in: user.departmentChats }, chatType: 'department' })
+      .populate('department', 'name') // Populate department name
+      .populate('lastMessageSender', 'userName firstName lastName')
+      .lean();
+
+    const chatList = chats.map(chat => ({
+      id: chat._id.toString(),
+      name: chat.department?.name || 'Department Chat',
+      lastMessage: chat.lastMessageText || '',
+      lastMessageTimestamp: chat.lastMessageAt || chat.createdAt,
+      lastMessageSender: chat.lastMessageSender?.userName || chat.lastMessageSender?.firstName || 'N/A',
+      type: 'department',
+      departmentId: chat.department?._id.toString(),
+      unreadCount: chat.unreadCounts.find(uc => uc.user.toString() === currentUser._id.toString())?.count || 0,
+    }));
+
+    res.status(200).json({ data: chatList });
+  } catch (err) {
+    console.error('Error in getDepartmentChatList:', err);
+    res.status(500).json({ message: 'Failed to fetch department chats', error: err.message });
+  }
+};
 
   const getGeneralChatList = async (req, res) => {
     try {
@@ -1221,100 +1430,165 @@ const getNotifications = async (req, res) => {
   };
 
   // Get unit messages
-  const getUnitMessages = async (req, res) => {
-    try {
-      const { unitId } = req.params;
-      const userId = req.user._id;
+const getUnitMessages = async (req, res) => {
+  try {
+    const { unitId } = req.params;
+    const userId = req.user._id;
+    const { before, limit: queryLimit } = req.query;
 
-      // Validate unitId format
-      if (!isValidObjectId(unitId)) {
-        return res.status(400).json({ message: "Invalid unit ID format." });
-      }
-
-      // Find the unit and check membership
-      const unit = await Unit.findById(unitId);
-      if (!unit) {
-        return res.status(404).json({ message: "Unit not found" });
-      }
-
-      if (!unit.members.some((memberId) => memberId.equals(userId))) {
-        return res
-          .status(403)
-          .json({ message: "You are not a member of this unit" });
-      }
-
-      // Pagination query param for infinite scroll
-      const { before } = req.query;
-      const limit = 20;
-
-      // Fetch messages for this unit's chat
-      const messages = await Chat.find({
-        chatType: "unit",
-        unit: unitId,
-      })
-        .sort({ createdAt: -1 })
-        .limit(limit)
-        .populate("senderId", "username firstName lastName userImage");
-
-      // Reverse to oldest first for client rendering
-      messages.reverse();
-
-      // Optional: mark unread messages as read for this user
-      await Chat.updateMany(
-        {
-          chatType: "unit",
-          unit: unitId,
-          readBy: { $ne: userId }, // not read by this user
-        },
-        {
-          $addToSet: { readBy: userId },
-        }
-      );
-
-      // Send response
-      return res.status(200).json({
-        success: true,
-        messages,
-        hasMore: messages.length === limit,
-      });
-    } catch (error) {
-      console.error("Error getting unit messages:", error);
-      return res
-        .status(500)
-        .json({ message: "Server error. Please try again later." });
+    if (!isValidObjectId(unitId)) {
+      return res.status(400).json({ message: 'Invalid unit ID format.' });
     }
-  };
 
+    // Find the unit and check membership
+    const unit = await Unit.findById(unitId);
+    if (!unit) {
+      return res.status(404).json({ message: 'Unit not found' });
+    }
+    if (!unit.members.some(memberId => memberId.equals(userId))) {
+      return res.status(403).json({ message: 'You are not a member of this unit' });
+    }
+
+    // Find the unit chat
+    const unitChat = await UnitChat.findOne({ unit: unitId });
+    if (!unitChat) {
+      return res.status(404).json({ message: 'Unit chat not found' });
+    }
+    const chat = await Chat.findOne({ chatType: 'unit', unit: unitChat._id });
+    if (!chat) {
+      return res.status(404).json({ message: 'Chat not found for this unit' });
+    }
+
+    const MAX_LIMIT = 50;
+    const limit = Math.min(parseInt(queryLimit || '20', 10), MAX_LIMIT);
+
+    // Build message filter
+    let filter = { chat: chat._id };
+    if (before && isValidObjectId(before)) {
+      filter._id = { $lt: new mongoose.Types.ObjectId(before) };
+    }
+
+    // Fetch messages
+    const messages = await Message.find(filter)
+      .sort({ createdAt: -1 })
+      .limit(limit + 1)
+      .populate('sender', 'userName firstName lastName userImage')
+      .populate({
+        path: 'reactions.user',
+        select: 'userName firstName lastName',
+      })
+      .populate({
+        path: 'replyTo',
+        select: 'messageText sender',
+        populate: { path: 'sender', select: 'userName' },
+      })
+      .lean();
+
+    const hasMore = messages.length > limit;
+    const messagesToReturn = messages.slice(0, limit).reverse();
+
+    // Mark messages as read
+    await Promise.all([
+      Message.updateMany(
+        { chat: chat._id, sender: { $ne: userId }, 'readBy.user': { $ne: userId } },
+        { $addToSet: { readBy: { user: userId, readAt: new Date() } } }
+      ),
+      Chat.findOneAndUpdate(
+        { _id: chat._id, 'unreadCounts.user': userId },
+        { $set: { 'unreadCounts.$.count': 0 } }
+      ),
+    ]);
+
+    return res.status(200).json({
+      success: true,
+      messages: messagesToReturn,
+      hasMore,
+    });
+  } catch (error) {
+    console.error('Error getting unit messages:', error);
+    return res.status(500).json({ message: 'Server error.', error: error.message });
+  }
+};
   // Get all messages for a department
   const getDepartmentMessages = async (req, res) => {
+  try {
     const { departmentId } = req.params;
+    const userId = req.user._id;
+    const { before, limit: queryLimit } = req.query;
 
     if (!isValidObjectId(departmentId)) {
-      return res.status(400).json({ message: "Invalid department ID format." });
+      return res.status(400).json({ message: 'Invalid department ID format.' });
     }
 
-    try {
-      const messages = await Chat.DepartmentChat.find({
-        department: departmentId,
+    // Find the department and check membership
+    const department = await Department.findById(departmentId);
+    if (!department) {
+      return res.status(404).json({ message: 'Department not found' });
+    }
+    if (!department.members.some(memberId => memberId.equals(userId))) {
+      return res.status(403).json({ message: 'You are not a member of this department' });
+    }
+
+    // Find the department chat
+    const departmentChat = await DepartmentChat.findOne({ department: departmentId });
+    if (!departmentChat) {
+      return res.status(404).json({ message: 'Department chat not found' });
+    }
+    const chat = await Chat.findOne({ chatType: 'department', department: departmentChat._id });
+    if (!chat) {
+      return res.status(404).json({ message: 'Chat not found for this department' });
+    }
+
+    const MAX_LIMIT = 50;
+    const limit = Math.min(parseInt(queryLimit || '20', 10), MAX_LIMIT);
+
+    // Build message filter
+    let filter = { chat: chat._id };
+    if (before && isValidObjectId(before)) {
+      filter._id = { $lt: new mongoose.Types.ObjectId(before) };
+    }
+
+    // Fetch messages
+    const messages = await Message.find(filter)
+      .sort({ createdAt: -1 })
+      .limit(limit + 1)
+      .populate('sender', 'userName firstName lastName userImage')
+      .populate({
+        path: 'reactions.user',
+        select: 'userName firstName lastName',
       })
-        .populate("senderId", "name email") // populate sender details
-        .sort({ createdAt: 1 }); // oldest first
+      .populate({
+        path: 'replyTo',
+        select: 'messageText sender',
+        populate: { path: 'sender', select: 'userName' },
+      })
+      .lean();
 
-      // Optional: You could include a hasMore flag if you want pagination/infinite scroll
+    const hasMore = messages.length > limit;
+    const messagesToReturn = messages.slice(0, limit).reverse();
 
-      res.status(200).json({
-        success: true,
-        messages,
-        count: messages.length,
-      });
-    } catch (error) {
-      logger.error("Error fetching department messages:", error);
-      console.error("Error fetching department messages:", error);
-      res
-        .status(500)
-        .json({ message: "Server error. Please try again later." });
-    }
-  };
+    // Mark messages as read
+    await Promise.all([
+      Message.updateMany(
+        { chat: chat._id, sender: { $ne: userId }, 'readBy.user': { $ne: userId } },
+        { $addToSet: { readBy: { user: userId, readAt: new Date() } } }
+      ),
+      Chat.findOneAndUpdate(
+        { _id: chat._id, 'unreadCounts.user': userId },
+        { $set: { 'unreadCounts.$.count': 0 } }
+      ),
+    ]);
+
+    return res.status(200).json({
+      success: true,
+      messages: messagesToReturn,
+      hasMore,
+    });
+  } catch (error) {
+    console.error('Error fetching department messages:', error);
+    return res.status(500).json({ message: 'Server error.', error: error.message });
+  }
+};
 
   // Get general chat messages
   const getGeneralMessages = async (req, res) => {
@@ -1371,7 +1645,9 @@ const getNotifications = async (req, res) => {
     getDepartmentChatList,
     getGeneralChatList,
     checkPrivateChatExists,
-    getCombinedChatlist
+    getCombinedChatlist,
+    createDepartmentChat,
+    getDepartmentChat,
   };
 };
 

@@ -18,11 +18,13 @@ const unitChatSchema = new mongoose.Schema({
 }, { timestamps: true });
 
 // Department Chat Schema (Department Conversation Metadata)
-const departmentChatSchema = new mongoose.Schema({
-    chatId: { type: String, required: true, unique: true, index: true },
-    department: { type: mongoose.Schema.Types.ObjectId, ref: 'Department', required: true, unique: true }, // Ensure department is unique
-   
-}, { timestamps: true });
+// const departmentChatSchema = new mongoose.Schema(
+//   {
+//     department: { type: mongoose.Schema.Types.ObjectId, ref: "Department", required: false, unique: true },
+//     members: [{ type: mongoose.Schema.Types.ObjectId, ref: "User" }],
+//   },
+//   { timestamps: true }
+// );
 
 // General Chat Schema (General Church-wide Conversation Metadata)
 const generalChatSchema = new mongoose.Schema({
@@ -32,7 +34,7 @@ const generalChatSchema = new mongoose.Schema({
 
 const PrivateChat = mongoose.model('PrivateChat', privateChatSchema);
 const UnitChat = mongoose.model('UnitChat', unitChatSchema);
-const DepartmentChat = mongoose.model('DepartmentChat', departmentChatSchema);
+// const DepartmentChat = mongoose.model('DepartmentChat', departmentChatSchema);
 const GeneralChat = mongoose.model('GeneralChat', generalChatSchema);
 
-module.exports = { PrivateChat, UnitChat, DepartmentChat, GeneralChat };
+module.exports = { PrivateChat, UnitChat, GeneralChat };

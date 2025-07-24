@@ -2,13 +2,13 @@ const mongoose = require('mongoose')
 const Church = require('../Models/churchesAdmin');
 const Unit = require('../Models/unit'); 
 const User = require('../Models/user');
-const bcrypt = require('bcryptjs');
+const Chat = require('../Models/AllChats');
+const { v4: uuidv4 } = require('uuid');
 const jwt = require('../Middlewares/jwt');
 const { sendVerificationEmail } = require('../Middlewares/emailVerification');
 const logger = require('../Middlewares/logger');
 const { uploadToCloudinary, deleteFromCloudinary,  } = require('../Middlewares/cloudinaryUpload');
-const asyncHandler = require('express-async-handler');
-const role = require('../Models/role');
+
 const RefreshToken = require('../Models/refreshToken');
 
 
@@ -443,128 +443,197 @@ const updateChurchProfile = async (req, res) => {
 };
 
 // Create controller for churchAdmin creating unit or units
-const createUnit = asyncHandler(async (req, res) => {
-  try {
-    const { unitName, description, unitHead: unitHeadStr } = req.body;
-    const { role, churchId, isChurchAdmin } = req.user;
+const createUnit = async (req, res) => {
+  let { unitName, description, unitHead: unitHeadStr, churchId } = req.body;
+  const { _id: userId, role, isChurchAdmin } = req.user;
 
-    if (!isChurchAdmin || role !== "churchAdmin") {
-      console.error("unitController: Unauthorized attempt", { userId: req.user._id, role, isChurchAdmin });
-      return res.status(403).json({ message: "Unauthorized: Only Church Admins can create units" });
-    }
+  console.log("unitController: createUnit request", {
+    userId,
+    unitName,
+    unitHeadStr,
+    churchId,
+    body: req.body,
+    files: req.files,
+  });
 
-    const church = await Church.findById(churchId);
-    if (!church) {
-      console.error("unitController: Church not found", { churchId });
-      return res.status(404).json({ message: "Church not found", churchId });
-    }
+  // Check authorization
+  if (!isChurchAdmin || role !== "churchAdmin") {
+    console.error("unitController: Unauthorized attempt", { userId, role, isChurchAdmin });
+    return res.status(403).json({ message: "Unauthorized: Only Church Admins can create units" });
+  }
 
-    if (!unitHeadStr) {
-      console.error("unitController: Unit head is required", { unitName, churchId });
-      return res.status(400).json({ message: "Unit head is required" });
-    }
+  // Validate required fields
+  if (!unitName || !churchId) {
+    console.error("unitController: Missing required fields", { unitName, churchId });
+    return res.status(400).json({ message: "Unit name and church ID are required" });
+  }
 
-    let unitHeadData;
+  // Validate churchId
+  if (!mongoose.isValidObjectId(churchId)) {
+    console.error("unitController: Invalid churchId format", { churchId });
+    return res.status(400).json({ message: "Invalid church ID format" });
+  }
+
+  // Verify church exists
+  const church = await Church.findById(churchId);
+  if (!church) {
+    console.error("unitController: Church not found", { churchId });
+    return res.status(404).json({ message: "Church not found", churchId });
+  }
+
+  // Parse unitHead if sent as JSON string
+  let unitHeadId;
+  if (unitHeadStr) {
     try {
-      unitHeadData = JSON.parse(unitHeadStr);
-      // console.log("unitController: Parsed unitHead:", unitHeadData);
+      const unitHeadData = JSON.parse(unitHeadStr);
+      unitHeadId = unitHeadData?._id;
+      console.log("unitController: Parsed unitHeadId from unitHead:", unitHeadId);
     } catch (error) {
       console.error("unitController: Invalid unitHead format", { unitHeadStr, error: error.message });
       return res.status(400).json({ message: "Invalid unitHead format" });
     }
+  } else {
+    console.error("unitController: Unit head is required", { unitName, churchId });
+    return res.status(400).json({ message: "Unit head is required" });
+  }
 
-    if (!mongoose.Types.ObjectId.isValid(unitHeadData._id)) {
-      console.error("unitController: Invalid unit head ID", { unitHeadId: unitHeadData._id });
-      return res.status(400).json({ message: "Invalid unit head ID" });
+  // Validate unitHeadId
+  if (!mongoose.Types.ObjectId.isValid(unitHeadId)) {
+    console.error("unitController: Invalid unit head ID", { unitHeadId });
+    return res.status(400).json({ message: "Invalid unit head ID" });
+  }
+
+  // Check if user is already a unit head
+  const alreadyHead = await Unit.findOne({ "unitHead._id": unitHeadId });
+  if (alreadyHead) {
+    console.error("unitController: User is already unit head", { unitHeadId, existingUnit: alreadyHead._id });
+    return res.status(400).json({ message: "User is already unit head in another unit" });
+  }
+
+  // Verify unit head user
+  const unitHeadUser = await User.findById(unitHeadId);
+  if (!unitHeadUser) {
+    console.error("unitController: Unit head user not found", { unitHeadId });
+    return res.status(404).json({ message: "Unit head user not found", unitHeadId });
+  }
+
+  // Check if unit head is part of the church
+  const isInChurch = unitHeadUser.churchesJoined.some((id) => id.toString() === churchId.toString());
+  if (!isInChurch) {
+    console.error("unitController: User is not part of this church", { unitHeadId, churchId });
+    return res.status(400).json({ message: "Unit head is not part of this church" });
+  }
+
+  // Handle unitLogo
+  let unitLogo = [];
+  if (req.files?.unitLogo) {
+    const file = Array.isArray(req.files.unitLogo) ? req.files.unitLogo[0] : req.files.unitLogo;
+    if (!file.mimetype.startsWith("image/")) {
+      console.error("unitController: Invalid file type for unit logo", { mimetype: file.mimetype });
+      return res.status(400).json({ message: "Only image files are allowed for unit logo" });
     }
-
-    const alreadyHead = await Unit.findOne({ "unitHead._id": unitHeadData._id });
-    if (alreadyHead) {
-      console.error("unitController: User is already unit head", { unitHeadId: unitHeadData._id, existingUnit: alreadyHead._id });
-      return res.status(400).json({ message: "User is already unit head in another unit" });
+    const fileBuffer = file.data || file.buffer;
+    if (fileBuffer) {
+      const result = await uploadToCloudinary(fileBuffer, "unit-logos/");
+      unitLogo = [{ url: result.secure_url, cld_id: result.public_id }];
     }
+  }
 
-    const user = await User.findById(unitHeadData._id);
-    if (!user) {
-      console.error("unitController: Unit head user not found", { unitHeadId: unitHeadData._id });
-      return res.status(404).json({ message: "Unit head user not found", unitHeadId: unitHeadData._id });
-    }
+  const session = await mongoose.startSession();
+  session.startTransaction();
 
-    const isInChurch = user.churchesJoined.some((id) => id.toString() === churchId.toString());
-    if (!isInChurch) {
-      console.error("unitController: User is not part of this church", { unitHeadId: unitHeadData._id, churchId });
-      return res.status(400).json({ message: "User is not part of this church" });
-    }
-
-    const unitHead = {
-      _id: user._id.toString(),
-      userName: unitHeadData.userName || user.userName || user.firstName || user.lastName || "Unit Head",
-      email: unitHeadData.email || user.email || "placeholder@example.com",
-    };
-
-    let unitLogo = null;
-    if (req.files && req.files.unitLogo) {
-      const file = Array.isArray(req.files.unitLogo)
-        ? req.files.unitLogo[0]
-        : req.files.unitLogo;
-
-      if (!file.mimetype.startsWith("image/")) {
-        console.error("unitController: Invalid file type for unit logo", { mimetype: file.mimetype });
-        return res.status(400).json({ message: "Only image files are allowed for unit logo." });
-      }
-
-      const fileBuffer = file.data || file.buffer;
-      if (fileBuffer) {
-        const result = await uploadToCloudinary(fileBuffer, "unit-logos/");
-        unitLogo = {
-          url: result.secure_url,
-          cld_id: result.public_id,
-        };
-      }
-    }
-
-    const unit = await Unit.create({
-      unitName: unitName || "Unnamed Unit",
-      description: description || "No description yet",
-      unitLogo: unitLogo ? [unitLogo] : [],
-      church: church._id,
-      unitHead,
+  try {
+    // Create UnitChat
+    const unitChatId = uuidv4();
+    const unitChat = new Chat({
+      chatId: unitChatId,
+      unit: null,
+      members: [unitHeadId],
     });
 
-    user.isUnitHead = true;
-    user.role = "unitHead";
-    if (!user.assignedUnits.includes(unit._id)) {
-      user.assignedUnits.push(unit._id);
-    }
-    user.isEmailVerified = user.isEmailVerified ?? true;
-    try {
-      await user.save({ validateBeforeSave: false });
-      // console.log("unitController: Successfully updated unit head", { unitHeadId: unitHead._id, unitId: unit._id, userRole: user.role });
-    } catch (error) {
-      console.error("unitController: Failed to update unit head", { unitHeadId: unitHead._id, error: error.message });
-      await Unit.deleteOne({ _id: unit._id });
-      return res.status(500).json({ message: "Failed to update unit head role", error: error.message });
-    }
+    // Create Chat
+    const chat = new Chat({
+      chatType: "unit",
+      participants: [unitHeadId],
+      unit: null,
+      name: `${unitName} Chat`,
+      description: `Chat room for ${unitName}`,
+      createdAt: new Date(),
+      unreadCounts: [{ user: unitHeadId, count: 0 }],
+    });
 
-    church.units.push(unit._id);
-    await church.save({ validateBeforeSave: false });
+    // Create unitHead object
+    const unitHead = {
+      _id: unitHeadUser._id.toString(),
+      userName: unitHeadUser.userName || unitHeadUser.firstName || unitHeadUser.lastName || "Unit Head",
+      email: unitHeadUser.email || "placeholder@example.com",
+    };
 
+    // Create Unit
+    const unit = new Unit({
+      unitName: unitName || "Unnamed Unit",
+      description: description || "No description yet",
+      church: churchId,
+      unitHead,
+      members: [unitHeadId],
+      totalMembers: 1,
+      departments: [],
+      unitLogo,
+    });
+
+    // Save documents
+    await unit.save({ session });
+    unitChat.unit = unit._id;
+    await unitChat.save({ session });
+    chat.unit = unitChat._id;
+    await chat.save({ session });
+
+    // Update user's unitChats, assignedUnits, and role
+    await User.updateOne(
+      { _id: unitHeadId },
+      {
+        $addToSet: { assignedUnits: unit._id, unitChats: chat._id },
+        $set: { isUnitHead: true, role: "unitHead", isEmailVerified: unitHeadUser.isEmailVerified ?? true },
+      },
+      { session }
+    );
+
+    // Update church's units
+    await Church.updateOne(
+      { _id: churchId },
+      { $addToSet: { units: unit._id } },
+      { session }
+    );
+
+    await session.commitTransaction();
+
+    // Populate unit for response
     const populatedUnit = await Unit.findById(unit._id)
       .populate("departments", "name")
       .populate("members.userId", "name userName firstName lastName userImage")
       .lean();
 
+    console.log("unitController: Unit created", { unitId: unit._id, unitName, chatId: chat._id });
     res.status(201).json({
       message: "Unit created successfully",
-      unit: populatedUnit,
+      unit: { ...populatedUnit, chatId: chat._id },
     });
   } catch (error) {
-    console.error("unitController: Error creating unit:", error.message);
-    res.status(500).json({ message: "Internal server error", error: error.message });
+    await session.abortTransaction();
+    console.error("unitController: Error creating unit", {
+      message: error.message,
+      stack: error.stack,
+      unitName,
+      unitHeadId,
+      churchId,
+    });
+    res.status(500).json({ message: "Failed to create unit", error: error.message });
+  } finally {
+    session.endSession();
   }
-});
+};
 
-const updateUnit = asyncHandler(async (req, res) => {
+const updateUnit = async (req, res) => {
   try {
     const { unitId } = req.params;
     const { unitName, description, unitHead: unitHeadStr } = req.body;
@@ -689,7 +758,7 @@ const updateUnit = asyncHandler(async (req, res) => {
     console.error("unitController: Error updating unit:", error);
     res.status(500).json({ message: "Internal server error" });
   }
-});
+};
 
 // Assign a user the role of unitHead
 const assignUnitHead = async (req, res) => {

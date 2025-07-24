@@ -20,11 +20,10 @@ const unitSchema = new mongoose.Schema({
   unitHead: {
     _id: {
       type: String,
-      required: true
     },
     userName: {
       type: String,
-      required: true
+     
     },
     email: {
       type: String

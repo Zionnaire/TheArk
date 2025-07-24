@@ -129,12 +129,13 @@ const userSchema = new mongoose.Schema({
             ref: 'Chat', // Now references the generic Chat model
         },
     ],
-    departmentChats: [
-        {
-            type: mongoose.Schema.Types.ObjectId,
-            ref: 'Chat', // Now references the generic Chat model
-        },
-    ],
+  departmentChats: [
+  {
+    id: { type: mongoose.Schema.Types.ObjectId, ref: 'Chat' },
+    name: String,
+  }
+],
+
     generalChats: [
         {
             type: mongoose.Schema.Types.ObjectId,

@@ -3,206 +3,298 @@ const logger = require('../Middlewares/logger');
 const Unit = require('../Models/unit');
 const User = require('../Models/user');
 const Church = require('../Models/churchesAdmin')
+const Chat = require('../Models/AllChats');
 const Department = require('../Models/departments')
 const asyncHandler = require('express-async-handler');
 const { error } = require('winston');
+const { v4: uuidv4 } = require('uuid');
 
 
 
   // User join a unit 
 const joinUnit = async (req, res) => {
+  const { unitId } = req.params; // Changed from id to unitId
+  const { _id: userId, churchId } = req.user;
   const session = await mongoose.startSession();
   session.startTransaction();
+
   try {
-    const unitId = req.params.id;
-    if (!unitId || !mongoose.Types.ObjectId.isValid(unitId)) {
+    console.log(`[unitController] Join unit request:`, { unitId, userId, churchId, rawUnitId: req.params.unitId });
+
+    // Validate unitId format
+    if (!unitId || typeof unitId !== 'string' || !mongoose.Types.ObjectId.isValid(unitId)) {
+      console.error("[unitController] Invalid unitId format:", { unitId, type: typeof unitId });
       await session.abortTransaction();
-      session.endSession();
-      return res.status(400).json({ message: "Valid Unit ID is required" });
+      return res.status(400).json({ message: "Invalid unit ID format" });
     }
 
-    const unit = await Unit.findById(unitId).session(session);
-    if (!unit) {
+    // Validate user
+    if (!userId) {
+      console.error("[unitController] Unauthorized: User not found in request");
       await session.abortTransaction();
-      session.endSession();
-      return res.status(404).json({ message: "Unit not found" });
-    }
-
-    if (!req.user || !req.user._id) {
-      await session.abortTransaction();
-      session.endSession();
       return res.status(401).json({ message: "Unauthorized: User not found in request" });
     }
 
-    const user = await User.findById(req.user._id).session(session);
+    const user = await User.findById(userId).session(session);
     if (!user) {
+      console.error("[unitController] User not found:", userId);
       await session.abortTransaction();
-      session.endSession();
       return res.status(404).json({ message: "User not found" });
     }
 
+    // Check unit join limit
     if (user.assignedUnits.length >= 3) {
+      console.warn("[unitController] User unit limit reached:", userId);
       await session.abortTransaction();
-      session.endSession();
       return res.status(400).json({ message: "You can only join up to 3 units" });
     }
 
-    if (user.assignedUnits.includes(unitId)) {
+    // Find unit and verify church association
+    const unit = await Unit.findOne({
+      _id: new mongoose.Types.ObjectId(unitId),
+      church: new mongoose.Types.ObjectId(churchId),
+    }).session(session);
+    if (!unit) {
+      console.error("[unitController] Unit not found or not associated with church:", { unitId, churchId });
       await session.abortTransaction();
-      session.endSession();
+      return res.status(404).json({ message: "Unit not found or not associated with your church" });
+    }
+
+    // Check if user is already in the unit
+    if (unit.members.some((member) => member.toString() === userId)) {
+      console.warn("[unitController] User already in unit:", { userId, unitId });
+      await session.abortTransaction();
       return res.status(409).json({ message: "You are already in this unit" });
     }
 
-    user.assignedUnits.push(unitId);
-    unit.members = unit.members || []; // Initialize if undefined
-    unit.members.push(user._id); // Push ObjectId directly
+    // Find or create UnitChat
+    let unitChat = await Chat.findOne({ unit: unitId }).session(session);
+    if (!unitChat) {
+      console.log("[unitController] Creating new UnitChat for unit:", unitId);
+      unitChat = new Chat({
+        chatId: uuidv4(),
+        unit: unitId,
+        members: [userId],
+      });
+      await unitChat.save({ session });
+    } else {
+      unitChat.participants = unitChat.participants || [];
+      if (!unitChat.participants.some((member) => member.toString() === userId)) {
+        unitChat.participants.push(userId);
+        await unitChat.save({ session });
+      }
+    }
+
+    // Find or create Chat
+    let chat = await Chat.findOne({ chatType: "unit", unit: unitChat._id }).session(session);
+    if (!chat) {
+      console.log("[unitController] Creating new Chat for unit:", unitId);
+      chat = new Chat({
+        chatType: "unit",
+        unit: unitChat._id,
+        participants: [userId],
+        name: `${unit.unitName} Chat`,
+        description: `Chat room for ${unit.unitName}`,
+        createdAt: new Date(),
+        unreadCounts: [{ user: userId, count: 0 }],
+      });
+      await chat.save({ session });
+    } else {
+      if (!chat.participants.some((p) => p.toString() === userId)) {
+        chat.participants.push(userId);
+        chat.unreadCounts.push({ user: userId, count: 0 });
+        await chat.save({ session });
+      }
+    }
+
+    // Update Unit and User
+    unit.members = unit.members || [];
+    unit.members.push(userId);
     unit.totalMembers = unit.members.length;
 
-    await user.save({ validateModifiedOnly: true, session });
+    user.assignedUnits = user.assignedUnits || [];
+    user.assignedUnits.push(unitId);
+    user.unitChats = user.unitChats || [];
+    if (!user.unitChats.some((chatId) => chatId.toString() === chat._id.toString())) {
+      user.unitChats.push(chat._id);
+    }
+
     await unit.save({ validateModifiedOnly: true, session });
+    await user.save({ validateModifiedOnly: true, session });
 
     await session.commitTransaction();
+    console.log("[unitController] User joined unit successfully:", { unitId, unitName: unit.unitName, userId });
 
-    logger.info(`User ${user._id} successfully joined unit ${unitId}`);
-    return res.status(200).json({
+    const populatedUnit = await Unit.findById(unitId)
+      .populate("church", "churchName")
+      .populate("members.userId", "name userName firstName lastName userImage")
+      .lean();
+
+    res.status(200).json({
       message: "User joined the unit successfully",
       unit: {
         _id: unit._id,
         unitName: unit.unitName,
         totalMembers: unit.totalMembers,
-        members: unit.members,
+        members: populatedUnit.members,
+        churchId: unit.church,
+        churchName: populatedUnit.church?.churchName || "Unknown Church",
+        unitLogo: unit.unitLogo,
+        description: unit.description,
       },
-      user: { assignedUnits: user.assignedUnits },
+      user: {
+        _id: user._id,
+        assignedUnits: user.assignedUnits,
+        unitChats: user.unitChats,
+        churchId: user.churchId,
+        churchName: user.churchName,
+        isEmailVerified: user.isEmailVerified,
+        role: user.role,
+        name: user.name,
+      },
     });
   } catch (error) {
     await session.abortTransaction();
-    logger.error(`Error joining unit (userId: ${req.user?._id}, unitId: ${req.params.id}):`, error);
-    return res.status(500).json({ message: "Failed to join unit. Please try again." });
-  } finally {
-    session.endSession();
-  }
-}
-
-    // User leave a unit
-const leaveUnit = async (req, res) => {
-  const session = await mongoose.startSession();
-  session.startTransaction();
-  try {
-    const unitId = req.params.id;
-    if (!unitId || !mongoose.Types.ObjectId.isValid(unitId)) {
-      await session.abortTransaction();
-      session.endSession();
-      return res.status(400).json({ message: "Valid Unit ID is required" });
-    }
-
-    if (!req.user || !req.user._id) {
-      await session.abortTransaction();
-      session.endSession();
-      return res.status(401).json({ message: "Unauthorized: User not found in request" });
-    }
-
-    const user = await User.findById(req.user._id).session(session);
-    if (!user) {
-      await session.abortTransaction();
-      session.endSession();
-      return res.status(404).json({ message: "User not found" });
-    }
-
-    if (!user.assignedUnits.includes(unitId)) {
-      await session.abortTransaction();
-      session.endSession();
-      return res.status(400).json({ message: "You are not a member of this unit" });
-    }
-
-    const unit = await Unit.findById(unitId).session(session);
-    if (!unit) {
-      await session.abortTransaction();
-      session.endSession();
-      return res.status(404).json({ message: "Unit not found" });
-    }
-
-    unit.members = unit.members || []; // Initialize if undefined
-    unit.members = unit.members.filter((member) => member.toString() !== user._id.toString());
-    unit.totalMembers = unit.members.length;
-
-    user.assignedUnits = user.assignedUnits.filter((uid) => uid.toString() !== unitId);
-
-    await user.save({ validateModifiedOnly: true, session });
-    await unit.save({ validateModifiedOnly: true, session });
-
-    await session.commitTransaction();
-
-    logger.info(`User ${user._id} successfully left unit ${unitId}`);
-    return res.status(200).json({
-      message: "Successfully left unit",
-      unit: {
-        _id: unit._id,
-        unitName: unit.unitName,
-        totalMembers: unit.totalMembers,
-        members: unit.members,
-      },
-      user: { assignedUnits: user.assignedUnits },
+    console.error("[unitController] Join unit error:", {
+      message: error.message,
+      stack: error.stack,
+      unitId,
+      userId,
     });
-  } catch (error) {
-    await session.abortTransaction();
-    logger.error(`Error leaving unit (userId: ${req.user?._id}, unitId: ${req.params.id}):`, error);
-    return res.status(500).json({ message: "Failed to leave unit. Please try again." });
+    res.status(500).json({ message: "Failed to join unit", error: error.message });
   } finally {
     session.endSession();
   }
 };
-  const requestToJoinUnit = asyncHandler(async (req, res) => {
-    const { unitId } = req.body;
-    const user = req.user;
-    const unit = await Unit.findById(unitId);
-  
-    if (!unit) return res.status(404).json({ message: "Unit not found" });
-  
-    // Check if already requested
-    const alreadyRequested = unit.pendingRequests.find(
-      (u) => u.userId.toString() === user._id.toString()
-    );
-    if (alreadyRequested) {
-      return res.status(400).json({ message: "You have already requested to join this unit" });
+
+const leaveUnit = async (req, res) => {
+  const { unitId } = req.params;
+  const { _id: userId, churchId } = req.user;
+  const session = await mongoose.startSession();
+  session.startTransaction();
+
+  try {
+    console.log("[unitController] Leave unit request:", { unitId, userId: userId.toString(), churchId });
+
+    // Validate unitId format
+    if (!mongoose.Types.ObjectId.isValid(unitId)) {
+      console.error("[unitController] Invalid unitId format:", { unitId });
+      await session.abortTransaction();
+      return res.status(400).json({ message: "Invalid unit ID format" });
     }
-  
-    unit.pendingRequests.push({ userId: user._id, name: `${user.firstName} ${user.lastName}` });
-    await unit.save();
-    res.status(200).json({ message: "Join request sent" });
-  });
 
-  // Controller to approve a user (only by unitHead)
-const approveUnitMember = asyncHandler(async (req, res) => {
-  const { unitId, userId } = req.body;
-  const currentUser = req.user;
+    // Validate user
+    if (!userId) {
+      console.error("[unitController] Unauthorized: User not found in request");
+      await session.abortTransaction();
+      return res.status(401).json({ message: "Unauthorized: User not found in request" });
+    }
 
-  const unit = await Unit.findById(unitId);
-  if (!unit) return res.status(404).json({ message: "Unit not found" });
+    const user = await User.findById(userId).session(session);
+    if (!user) {
+      console.error("[unitController] User not found:", { userId });
+      await session.abortTransaction();
+      return res.status(404).json({ message: "User not found" });
+    }
 
-  // Ensure only unit head can approve
-  if (unit.unitHead.toString() !== currentUser._id.toString()) {
-    return res.status(403).json({ message: "Only the unit head can approve requests" });
+    // Find unit and verify church association
+    const unit = await Unit.findOne({
+      _id: new mongoose.Types.ObjectId(unitId),
+      church: new mongoose.Types.ObjectId(churchId),
+    }).session(session);
+    if (!unit) {
+      console.error("[unitController] Unit not found or not associated with church:", { unitId, churchId });
+      await session.abortTransaction();
+      return res.status(404).json({ message: "Unit not found or not associated with your church" });
+    }
+
+    // Prevent unitHead from leaving
+    if (unit.unitHead && unit.unitHead.toString() === userId.toString()) {
+      console.warn("[unitController] UnitHead attempting to leave unit:", { userId, unitId });
+      await session.abortTransaction();
+      return res.status(403).json({ message: "Unit head cannot leave the unit. Contact a church admin to be removed." });
+    }
+
+    // Check if user is in the unit
+    if (!unit.members.some((member) => member.toString() === userId.toString())) {
+      console.warn("[unitController] User not in unit:", { userId, unitId, members: unit.members.map(id => id.toString()) });
+      await session.abortTransaction();
+      return res.status(400).json({ message: "You are not a member of this unit" });
+    }
+
+    // Remove user from UnitChat
+    let unitChat = await Chat.findOne({ unit: unitId }).session(session);
+    if (unitChat) {
+      unitChat.participants = unitChat.participants.filter((participant) => participant.toString() !== userId.toString());
+      await unitChat.save({ session });
+    } else {
+      console.warn("[unitController] No unitChat found for unit:", { unitId });
+    }
+
+    // Remove user from Chat
+    let chat = await Chat.findOne({ chatType: "unit", unit: unitChat?._id }).session(session);
+    if (chat) {
+      chat.participants = chat.participants.filter((p) => p.toString() !== userId.toString());
+      chat.unreadCounts = chat.unreadCounts.filter((uc) => uc.user.toString() !== userId.toString());
+      await chat.save({ session });
+    } else {
+      console.warn("[unitController] No chat found for unitChat:", { unitChatId: unitChat?._id });
+    }
+
+    // Update Unit and User
+    unit.members = unit.members.filter((member) => member.toString() !== userId.toString());
+    unit.totalMembers = unit.members.length;
+
+    user.assignedUnits = user.assignedUnits.filter((id) => id.toString() !== unitId);
+    user.unitChats = user.unitChats.filter((chatId) => chatId.toString() !== (chat?._id?.toString() || ""));
+
+    await unit.save({ validateModifiedOnly: true, session });
+    await user.save({ validateModifiedOnly: true, session });
+
+    await session.commitTransaction();
+    console.log("[unitController] User left unit successfully:", { unitId, unitName: unit.unitName, userId });
+
+    const populatedUnit = await Unit.findById(unitId)
+      .populate("church", "churchName")
+      .populate("members.userId", "name userName firstName lastName userImage")
+      .lean();
+
+    res.status(200).json({
+      message: "User left the unit successfully",
+      unit: {
+        _id: unit._id,
+        unitName: unit.unitName,
+        totalMembers: unit.totalMembers,
+        members: populatedUnit.members,
+        churchId: unit.church,
+        churchName: populatedUnit.church?.churchName || "Unknown Church",
+        unitLogo: unit.unitLogo,
+        description: unit.description,
+      },
+      user: {
+        _id: user._id,
+        assignedUnits: user.assignedUnits,
+        unitChats: user.unitChats,
+        churchId: user.churchId,
+        churchName: user.churchName,
+        isEmailVerified: user.isEmailVerified,
+        role: user.role,
+        name: user.name,
+      },
+    });
+  } catch (error) {
+    await session.abortTransaction();
+    console.error("[unitController] Leave unit error:", {
+      message: error.message,
+      stack: error.stack,
+      unitId,
+      userId,
+    });
+    res.status(500).json({ message: "Failed to leave unit", error: error.message });
+  } finally {
+    session.endSession();
   }
-
-  // Check if request exists
-  const requestIndex = unit.pendingRequests.findIndex(
-    (u) => u.userId.toString() === userId
-  );
-  if (requestIndex === -1) {
-    return res.status(400).json({ message: "No pending request from this user" });
-  }
-
-  // Move user to members list
-  const approvedUser = unit.pendingRequests[requestIndex];
-  unit.members.push(approvedUser);
-  unit.pendingRequests.splice(requestIndex, 1);
-  unit.totalMembers = unit.members.length;
-
-  await unit.save();
-
-  res.status(200).json({ message: "User approved and added to unit" });
-});
-
+};
 
 // Get all members of a unit
 const getUnitMembers = async (req, res) => {
@@ -311,94 +403,84 @@ const getAllUnits = asyncHandler(async (req, res) => {
 const getUnit = async (req, res) => {
   const { unitId } = req.params;
   const { churchId } = req.query;
-  if (!unitId || !churchId) {
-    console.error("unitController: Missing unitId or churchId", { unitId, churchId });
-    return res.status(400).json({ success: false, message: "Unit ID and Church ID are required" });
+  const user = req.user;
+
+  console.log("unitController: fetchUnit request", { unitId, churchId, userId: user._id.toString() });
+
+  if (!mongoose.Types.ObjectId.isValid(unitId) || !churchId) {
+    console.log("unitController: Invalid unit ID or church ID", { unitId, churchId });
+    return res.status(400).json({ message: "Invalid unit ID or church ID" });
   }
 
   try {
-    // console.log("Server: Fetching unit:", { unitId, churchId });
-    const unit = await Unit.findById(unitId)
+const unit = await Unit.findOne({ _id: unitId, church: churchId })
       .populate("unitHead", "userName email")
+      .populate("members", "userName email")
       .populate({
         path: "departments",
-        select: "name description unit members",
-        populate: { path: "members", select: "_id" },
-      })
-      .populate("members", "_id");
+        select: "_id deptName description members chatId unit",
+        populate: { path: "members", select: "userName email" },
+      });
+
+      console.log("unitController: Populated unit object before JSON response:", JSON.stringify(unit, null, 2));
+
 
     if (!unit) {
-      console.error("unitController: Unit not found", { unitId, churchId });
-      return res.status(404).json({ success: false, message: "Unit not found" });
+      console.log("unitController: Unit not found", { unitId, churchId });
+      return res.status(404).json({ message: "Unit not found" });
     }
 
-    // console.log("Server: Unit churchId check:", {
-    //   unitChurchId: unit.church.toString(),
-    //   requestChurchId: churchId.toString(),
-    // });
-    if (unit.church.toString() !== churchId.toString()) {
-      return res.status(400).json({ success: false, message: "Unit does not belong to the specified church" });
-    }
+    console.log("unitController: Unit fetched", {
+      unitId: unit._id.toString(),
+      unitName: unit.unitName,
+      unitHead: unit.unitHead ? unit.unitHead.userName : "No Head",
+      unitLogo: unit.unitLogo,
+      description: unit.description,
+      departmentCount: unit.departments?.length || 0,
+      departments: unit.departments?.map((d) => ({
+        id: d._id.toString(),
+        deptName: d.deptName,
+        description: d.description,
+        members: d.members?.filter(m => m && m._id).map((m) => m._id.toString()) || [],
 
-    // Debug departments and members
-    const departmentIds = unit.departments.map((d) => d._id.toString());
-    // console.log("Server: Department IDs in unit:", { departmentIds });
-    const departmentsExist = await Department.find({ _id: { $in: departmentIds } });
-    // console.log("Server: Departments exist in DB:", {
-    //   departmentCount: departmentsExist.length,
-    //   departmentIds: departmentsExist.map((d) => d._id.toString()),
-    // });
+        chatId: d.chatId?.toString(),
+      })),
+     members: unit.members?.filter(m => m && m._id).map((m) => m._id.toString()) || [],
 
-    const response = {
-      success: true,
-      unit: {
-        _id: unit._id.toString(),
-        unitName: unit.unitName,
-        description: unit.description,
-        unitHead: unit.unitHead
-          ? {
-              _id: unit.unitHead._id.toString(),
-              userName: unit.unitHead.userName || "",
-              email: unit.unitHead.email || "",
-            }
-          : undefined,
-        totalMembers: unit.members?.length || 0,
-        members: unit.members ? unit.members.map((m) => m._id.toString()) : [],
-        unitLogo: Array.isArray(unit.unitLogo)
-          ? unit.unitLogo.map((img) => ({
-              url: img.url || "",
-              uri: img.uri || img.url || "",
-              cld_id: img.cld_id || "default",
-              type: img.type || "image",
-            }))
-          : [],
-        departments: unit.departments
-          ? unit.departments.map((d) => ({
-              _id: d._id.toString(),
-              name: d.name,
-              description: d.description,
-              unit: d.unit.toString(),
-              members: d.members ? d.members.map((m) => m._id.toString()) : [],
-            }))
-          : [],
-        church: unit.church.toString(),
-        isActive: unit.isActive,
-      },
-    };
+      chatId: unit.chatId?.toString(),
+    });
 
-    // console.log("Server: Unit response:", {
-    //   unitName: response.unit.unitName,
-    //   members: response.unit.members,
-    //   departments: response.unit.departments,
-    // });
-
-    res.status(200).json(response);
+res.status(200).json({
+  unit: {
+    _id: unit._id.toString(),
+    unitName: unit.unitName,
+    description: unit.description,
+    unitLogo: unit.unitLogo,
+    unitHead: unit.unitHead,
+    departments: unit.departments
+      ?.filter(d => d != null) // Keep this filter
+      .map((d) => ({
+        _id: d._id.toString(),
+        deptName: d.deptName,
+        description: d.description,
+        unit: d.unit?.toString(), // <--- ADDED OPTIONAL CHAINING HERE
+        members: d.members?.filter(m => m && m._id).map((m) => m._id.toString()) || [], // This should now be fine
+        chatId: d.chatId?.toString(),
+      })) || [],
+    chatGroups: unit.chatGroups,
+    members: unit.members?.filter(m => m && m._id).map((m) => m._id.toString()) || [],
+    totalMembers: unit.members?.filter(m => m && m._id).length || 0,
+    chatId: unit.chatId?.toString(),
+  },
+});
   } catch (error) {
-    console.error("Server: Error fetching unit:", error);
-    res.status(500).json({ success: false, message: "Server error while fetching unit" });
+    console.error("unitController: Error fetching unit", {
+      message: error.message,
+      stack: error.stack,
+    });
+    res.status(500).json({ message: "Failed to fetch unit", error: error.message });
   }
 };
-
 // Remove unit member
 // @desc    Remove a unit member
 // @route   PATCH /api/units/:unitId/remove-member
@@ -452,6 +534,4 @@ module.exports = {
     leaveUnit,
     getUnitMembers,
     removeUnitMember,
-    requestToJoinUnit,
-    approveUnitMember
 };
