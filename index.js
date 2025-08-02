@@ -10,10 +10,9 @@ const bodyParser = require("body-parser");
 // Assuming your models are correctly path'd
 const Message = require("./Models/messages"); // This is for messages, NOT posts
 const Post = require("./Models/post"); // This IS your Post model, as clarified
-const AllChats = require("./Models/AllChats");
+const Chat = require("./Models/AllChats");
 const User = require("./Models/user");
 const Notification = require("./Models/notification");
-const Chat = require("./Models/chat");
 
 // Initialize Express app
 const app = express();
@@ -143,70 +142,51 @@ io.on("connection", (socket) => {
     console.log(`User ${userId} isTyping=${isTyping} in chat ${chatId}`);
   }); // Frontend should emit 'markAsRead'
 
-  socket.on("markAsRead", async ({ messageId, readerId, chatId }) => {
-    try {
-      if (!readerId) {
-        console.warn(
-          `Backend: Socket ${socket.id} attempted to mark message as read without readerId.`
-        );
-        return socket.emit(
-          "error",
-          "Authentication required to mark messages as read."
-        );
-      }
-      if (!messageId || !chatId) {
-        console.warn(
-          `Backend: Missing messageId or chatId for markAsRead from socket ${socket.id}.`
-        );
-        return socket.emit(
-          "error",
-          "Invalid request for marking message as read."
-        );
-      } // Ensure you have your Mongoose models (Message, AllChats) imported and available here
-
-      const updatedMessage = await Message.findByIdAndUpdate(
-        messageId,
-        { $addToSet: { readBy: { user: readerId } } },
-        { new: true, useFindAndModify: false }
-      );
-      if (!updatedMessage) {
-        console.warn(
-          `Backend: Message ${messageId} not found for marking as read.`
-        );
-        return socket.emit("error", "Message not found.");
-      }
-
-      await AllChats.findOneAndUpdate(
-        { _id: chatId, "messages._id": messageId },
-        { $addToSet: { "messages.$.readBy": { user: readerId } } },
-        { new: true, useFindAndModify: false }
-      );
-
-      if (updatedMessage) {
-        console.log(
-          `Backend: Message ${messageId} in chat ${chatId} marked as read by ${readerId}. Emitting 'messageRead'.`
-        );
-        // Note: updatedMessage.chat._id might be undefined if not populated.
-        // Consider how chat ID is reliably retrieved from updatedMessage or passed in payload.
-        io.to(chatId).emit("messageRead", {
-          // Emitting to chatId directly as it's passed in payload
-          messageId: updatedMessage._id.toString(),
-          chatId: chatId, // Use the chatId from the payload directly
-          readerId: readerId,
-          readBy: updatedMessage.readBy.map((entry) => entry.user.toString()),
-        });
-      } else {
-        console.warn(
-          `Backend: Message ${messageId} not found to mark as read.`
-        );
-      }
-    } catch (error) {
-      console.error("Backend: Error marking message as read:", error);
-      socket.emit("error", "Failed to mark message as read.");
+ socket.on("markAsRead", async ({ messageId, readerId, chatId }) => {
+  try {
+    if (!readerId) {
+      console.warn(`[Socket] Socket ${socket.id} attempted to mark message as read without readerId.`);
+      return socket.emit("error", "Authentication required to mark messages as read.");
     }
-  }); // --- NEW: Server-side emits for Reaction Updates and Notifications ---
+    if (!messageId || !chatId) {
+      console.warn(`[Socket] Missing messageId or chatId for markAsRead from socket ${socket.id}.`);
+      return socket.emit("error", "Invalid request for marking message as read.");
+    }
 
-  socket.on("addMessageReaction", async (data) => {
+    const updatedMessage = await Message.findByIdAndUpdate(
+      messageId,
+      { $addToSet: { readBy: { user: readerId, readAt: Date.now() } } },
+      { new: true }
+    );
+    if (!updatedMessage) {
+      console.warn(`[Socket] Message ${messageId} not found for marking as read.`);
+      return socket.emit("error", "Message not found.");
+    }
+
+    await Chat.findOneAndUpdate(
+      { _id: chatId, 'unreadCounts.user': readerId },
+      { $set: { 'unreadCounts.$.count': 0 } },
+      { new: true }
+    );
+
+    console.log(`[Socket] Message ${messageId} in chat ${chatId} marked as read by ${readerId}.`);
+    io.to(chatId).emit("messageRead", {
+      messageId: updatedMessage._id.toString(),
+      chatId,
+      readerId,
+      readBy: updatedMessage.readBy.map((entry) => ({
+        user: entry.user.toString(),
+        readAt: entry.readAt.toISOString(),
+      })),
+    });
+  } catch (error) {
+    console.error("[Socket] Error marking message as read:", error);
+    socket.emit("error", "Failed to mark message as read.");
+  }
+});
+
+// --- NEW: Server-side emits for Reaction Updates and Notifications ---
+socket.on("addMessageReaction", async (data) => {
     // ... database logic to add reaction ...
     const { messageId, chatId, reactorId, reactionType, updatedReactions } =
       data;

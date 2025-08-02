@@ -117,31 +117,36 @@ const userSchema = new mongoose.Schema({
       ref: 'Post',
     },
   ],
-   privateChats: [
-        {
-            type: mongoose.Schema.Types.ObjectId,
-            ref: 'Chat', // Now references the generic Chat model
-        },
-    ],
-    unitChats: [
-        {
-            type: mongoose.Schema.Types.ObjectId,
-            ref: 'Chat', // Now references the generic Chat model
-        },
-    ],
+  departments: [
+    {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'Department',
+    },
+  ],
   departmentChats: [
-  {
-    id: { type: mongoose.Schema.Types.ObjectId, ref: 'Chat' },
-    name: String,
-  }
-],
-
-    generalChats: [
-        {
-            type: mongoose.Schema.Types.ObjectId,
-            ref: 'Chat', // Now references the generic Chat model
-        },
-    ],
+    {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'Chat', // Simplified to match privateChats, unitChats, generalChats
+    },
+  ],
+  privateChats: [
+    {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'Chat',
+    },
+  ],
+  unitChats: [
+    {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'Chat',
+    },
+  ],
+  generalChats: [
+    {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'Chat',
+    },
+  ],
   isEmailVerified: {
     type: Boolean,
     default: false,
