@@ -23,11 +23,10 @@ const unitSchema = new mongoose.Schema({
     },
     userName: {
       type: String,
-     
     },
     email: {
-      type: String
-    }
+      type: String,
+    },
   },
   description: {
     type: String,
@@ -39,17 +38,18 @@ const unitSchema = new mongoose.Schema({
   },
   departments: [{ type: mongoose.Schema.Types.ObjectId, ref: "Department" }],
   chatGroups: [{ type: mongoose.Schema.Types.ObjectId, ref: "ChatGroup" }],
+  chatId: { type: mongoose.Schema.Types.ObjectId, ref: "Chat" }, // Added for primary unit chat
   members: [{ type: mongoose.Schema.Types.ObjectId, ref: "User" }],
   pendingRequests: [
     {
       userId: { type: mongoose.Schema.Types.ObjectId, ref: "User" },
       name: String,
-    }
+    },
   ],
   totalMembers: {
     type: Number,
     default: 0,
-  }
+  },
 }, { timestamps: true });
 
 module.exports = mongoose.model("Unit", unitSchema);

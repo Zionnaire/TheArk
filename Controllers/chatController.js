@@ -414,7 +414,7 @@ const chatIo = (io) => {
   };
 
   //Send a message (All chats)
-const sendMessage = async (req, res) => {
+  const sendMessage = async (req, res) => {
   try {
     const { chatType, recipientId: targetId } = req.params;
     const { message = "", reactions = "[]", tempId, replyTo } = req.body;
@@ -447,7 +447,7 @@ const sendMessage = async (req, res) => {
     }
 
     const attachments = req.files?.attachments;
-    const files = attachments ? Array.isArray(attachments) ? attachments : [attachments] : [];
+    const files = attachments ? (Array.isArray(attachments) ? attachments : [attachments]) : [];
     const uploadedAttachments = [];
 
     if (!message.trim() && files.length === 0 && !replyTo) {
@@ -482,6 +482,7 @@ const sendMessage = async (req, res) => {
     let genericChatDocument;
     let chatRoomId;
     let actualChatParticipants = [];
+    let unitId; // Store unitId for chat creation
 
     switch (chatType) {
       case "private":
@@ -533,29 +534,47 @@ const sendMessage = async (req, res) => {
 
       case "unit":
         if (!mongoose.Types.ObjectId.isValid(targetId)) {
-          return res.status(400).json({ message: "Invalid unit ID." });
+          return res.status(400).json({ message: "Invalid chat ID for unit chat." });
         }
-        const unit = await Unit.findById(targetId).select("members name");
-        if (!unit) {
-          return res.status(404).json({ message: "Unit not found." });
-        }
-        if (!unit.members.some((member) => member.toString() === senderId.toString())) {
-          return res.status(403).json({ message: "You are not a member of this unit." });
-        }
-        genericChatDocument = await Chat.findOne({ chatType: "unit", unitChatRef: targetId });
-        if (!genericChatDocument) {
-          console.log(`[sendMessage] Creating new unit chat for unit ${targetId}.`);
+        genericChatDocument = await Chat.findById(targetId);
+        if (!genericChatDocument || genericChatDocument.chatType !== "unit") {
+          // Attempt to find Unit by chatId in Unit collection
+          const unit = await Unit.findOne({ chatId: targetId }).select("members name unitHead");
+          if (!unit) {
+            return res.status(404).json({ message: "Unit chat not found and no associated unit found." });
+          }
+          console.log(`[sendMessage] Creating new unit chat for unit ${unit._id}.`);
           genericChatDocument = await new Chat({
             chatType: "unit",
-            unitChatRef: targetId,
-            participants: unit.members,
-            unreadCounts: unit.members.map((member) => ({ user: member, count: 0 })),
+            unit: unit._id,
+            participants: unit.members.concat(unit.unitHead).filter((id, index, self) => id && self.indexOf(id) === index),
+            unreadCounts: unit.members.concat(unit.unitHead).filter((id, index, self) => id && self.indexOf(id) === index).map((member) => ({
+              user: member,
+              count: 0,
+            })),
             name: `${unit.name} Chat`,
             description: `Chat for ${unit.name}`,
           }).save();
+          // Update Unit with new chatId
+          unit.chatId = genericChatDocument._id;
+          await unit.save();
+        }
+        if (!genericChatDocument.unit) {
+          return res.status(404).json({ message: "Unit reference missing in chat." });
+        }
+        const unit = await Unit.findById(genericChatDocument.unit).select("members name unitHead");
+        if (!unit) {
+          return res.status(404).json({ message: "Unit not found." });
+        }
+        if (
+          !unit.members.some((member) => member.equals(senderId)) &&
+          !unit.unitHead.equals(senderId)
+        ) {
+          return res.status(403).json({ message: "You are not a member or head of this unit." });
         }
         chatRoomId = genericChatDocument._id.toString();
-        actualChatParticipants = unit.members.map((m) => m.toString());
+        actualChatParticipants = unit.members.concat(unit.unitHead).map((m) => m.toString());
+        unitId = unit._id.toString(); // Store unitId for notifications
         break;
 
       case "department":
@@ -860,6 +879,167 @@ const sendMessage = async (req, res) => {
 };
 
 
+const createUnitChat = async (req, res) => {
+  try {
+    const { unitId } = req.body;
+    const currentUserId = req.user._id;
+
+    console.log(`[Backend] createUnitChat called for unitId: ${unitId}`, {
+      userId: currentUserId,
+    });
+
+    if (!mongoose.Types.ObjectId.isValid(unitId)) {
+      console.log(`[Backend] Invalid unitId format`, { unitId });
+      return res.status(400).json({ message: "Invalid unit ID format." });
+    }
+
+    const unit = await Unit.findById(unitId);
+    if (!unit) {
+      console.log(`[Backend] Unit not found`, { unitId });
+      return res.status(404).json({ message: "Unit not found." });
+    }
+
+    if (
+      !unit.members.some((memberId) => memberId.equals(currentUserId)) &&
+      !unit.unitHead.equals(currentUserId)
+    ) {
+      console.log(`[Backend] User not authorized to create chat for unit`, {
+        unitId,
+        userId: currentUserId,
+      });
+      return res
+        .status(403)
+        .json({ message: "You must be a unit member or head to create a chat." });
+    }
+
+    // Check if a Chat already exists for the unit
+    if (unit.chatId) {
+      const existingChat = await Chat.findOne({ _id: unit.chatId, chatType: "unit", unit: unitId });
+      if (existingChat) {
+        console.log(`[Backend] Unit chat already exists`, {
+          unitId,
+          chatId: unit.chatId,
+        });
+        return res.status(200).json({
+          success: true,
+          chatId: unit.chatId,
+          message: "Unit chat already exists.",
+        });
+      }
+    }
+
+    // Create a new Chat document
+    const chat = await Chat.create({
+      chatType: "unit",
+      unit: unitId,
+      participants: [currentUserId, ...unit.members, unit.unitHead].filter(
+        (id, index, self) => id && self.indexOf(id) === index
+      ), // Remove duplicates
+      unreadCounts: unit.members
+        .concat(unit.unitHead)
+        .filter((id, index, self) => id && self.indexOf(id) === index)
+        .map((memberId) => ({
+          user: memberId,
+          count: 0,
+        })),
+      name: unit.unitName || `Unit Chat ${unitId}`,
+      description: unit.description || "",
+    });
+
+    // Update the Unit document with the chatId
+    unit.chatId = chat._id;
+    await unit.save();
+
+    console.log(`[Backend] Unit chat created successfully`, {
+      unitId,
+      chatId: chat._id,
+    });
+
+    return res.status(201).json({
+      success: true,
+      chatId: chat._id,
+      message: "Unit chat created successfully.",
+    });
+  } catch (error) {
+    console.error("[Backend] Error creating unit chat:", {
+      message: error.message,
+      stack: error.stack,
+    });
+    return res.status(500).json({
+      success: false,
+      message: "Internal server error creating unit chat.",
+      error: error.message,
+    });
+  }
+};
+
+const getUnitChat = async (req, res) => {
+  const { unitId } = req.params;
+  const { _id: userId } = req.user;
+
+  try {
+    console.log(`[unitController] Get unit chat request:`, { unitId, userId });
+
+    if (!mongoose.Types.ObjectId.isValid(unitId)) {
+      console.error("[unitController] Invalid unitId format:", { unitId });
+      return res.status(400).json({ message: "Invalid unit ID format" });
+    }
+
+    const unit = await Unit.findById(unitId).select("members chatId unitName");
+    if (!unit) {
+      console.error("[unitController] Unit not found:", unitId);
+      return res.status(404).json({ message: "Unit not found" });
+    }
+
+    if (!unit.members.some((member) => member.toString() === userId.toString())) {
+      console.warn("[unitController] User not a member:", { userId, unitId });
+      return res.status(403).json({ message: "You are not a member of this unit" });
+    }
+
+    if (!unit.chatId) {
+      console.log("[unitController] No chat exists for unit:", unitId);
+      return res.status(404).json({ message: "No chat found for this unit" });
+    }
+
+    const chat = await Chat.findById(unit.chatId)
+      .select("chatType unit participants name description unreadCounts lastMessage lastMessageSender lastMessageText lastMessageAt")
+      .populate("participants", "userName firstName lastName userImage")
+      .populate("lastMessageSender", "userName firstName lastName userImage");
+    if (!chat) {
+      console.error("[unitController] Chat not found:", unit.chatId);
+      return res.status(404).json({ message: "Chat not found" });
+    }
+
+    console.log("[unitController] Unit chat retrieved:", { chatId: chat._id.toString(), unitId });
+
+    res.status(200).json({
+      success: true,
+      chat: {
+        _id: chat._id.toString(),
+        chatType: chat.chatType,
+        unit: chat.unit,
+        participants: chat.participants,
+        name: chat.name,
+        description: chat.description,
+        unreadCounts: chat.unreadCounts,
+        lastMessage: chat.lastMessage,
+        lastMessageSender: chat.lastMessageSender,
+        lastMessageText: chat.lastMessageText,
+        lastMessageAt: chat.lastMessageAt,
+      },
+    });
+  } catch (error) {
+    console.error("[unitController] Get unit chat error:", {
+      message: error.message,
+      stack: error.stack,
+      unitId,
+      userId,
+    });
+    res.status(500).json({ message: "Failed to retrieve unit chat", error: error.message });
+  }
+};
+
+
   const createDepartmentChat = async (req, res) => {
     const { departmentId } = req.body;
     const user = req.user;
@@ -1026,203 +1206,200 @@ const sendMessage = async (req, res) => {
     }
   };
 
-  const getMessages = async (req, res) => {
-    try {
-      const { chatId } = req.params;
-      const currentUserId = req.user._id;
-      const { beforeId, limit: queryLimit } = req.query;
+const getMessages = async (req, res) => {
+  try {
+    const { chatId } = req.params;
+    const currentUserId = req.user._id;
+    const { beforeId, limit: queryLimit } = req.query;
 
-      console.log(`[Backend] getMessages called for chatId: ${chatId}`);
-      console.log(
-        `[Backend] Query params: { beforeId: ${beforeId}, limit: ${queryLimit}, userId: ${currentUserId} }`
-      );
+    console.log(`[Backend] getMessages called for chatId: ${chatId}`);
+    console.log(
+      `[Backend] Query params: { beforeId: ${beforeId}, limit: ${queryLimit}, userId: ${currentUserId} }`
+    );
 
-      if (!mongoose.Types.ObjectId.isValid(chatId)) {
-        console.log(`[Backend] Invalid chatId format`, { chatId });
-        return res
-          .status(400)
-          .json({
-            message: "Invalid chat ID format (must be a valid ObjectId).",
-          });
+    if (!mongoose.Types.ObjectId.isValid(chatId)) {
+      console.log(`[Backend] Invalid chatId format`, { chatId });
+      return res
+        .status(400)
+        .json({
+          message: "Invalid chat ID format (must be a valid ObjectId).",
+        });
+    }
+
+    const MAX_LIMIT = 50;
+    const limit = Math.min(parseInt(queryLimit || "20", 10), MAX_LIMIT);
+
+    if (isNaN(limit) || limit <= 0) {
+      console.log(`[Backend] Invalid limit provided`, { queryLimit });
+      return res.status(400).json({ message: "Invalid limit provided." });
+    }
+
+    let chat = await Chat.findById(chatId);
+    if (!chat) {
+      console.log(`[Backend] Chat not found`, { chatId });
+      return res.status(404).json({ message: "Chat not found." });
+    }
+
+    console.log(`[Backend] Chat details`, {
+      chatId,
+      chatType: chat.chatType,
+      department: chat.department?.toString(),
+      unit: chat.unit?.toString(),
+      participants: chat.participants.map((p) => p.toString()),
+    });
+
+    // Validate membership and repair unit chat if necessary
+    if (chat.chatType === "unit") {
+      if (!chat.unit) {
+        console.log(`[Backend] Unit reference missing in chat`, { chatId });
+        return res.status(404).json({ message: "Unit reference missing in chat." });
       }
 
-      const MAX_LIMIT = 50;
-      const limit = Math.min(parseInt(queryLimit || "20", 10), MAX_LIMIT);
-
-      if (isNaN(limit) || limit <= 0) {
-        console.log(`[Backend] Invalid limit provided`, { queryLimit });
-        return res.status(400).json({ message: "Invalid limit provided." });
+      const unit = await Unit.findById(chat.unit);
+      if (!unit) {
+        console.log(`[Backend] Unit not found for chat`, { unitId: chat.unit, chatId });
+        return res.status(404).json({ message: "Unit not found for this chat." });
       }
 
-      const chat = await Chat.findById(chatId);
-      if (!chat) {
-        console.log(`[Backend] Chat not found`, { chatId });
-        return res.status(404).json({ message: "Chat not found." });
-      }
-
-      console.log(`[Backend] Chat details`, {
-        chatId,
-        chatType: chat.chatType,
-        department: chat.department?.toString(),
-        participants: chat.participants.map((p) => p.toString()),
-      });
-
-      // Validate membership for unit and department chats
-      if (chat.chatType === "unit") {
-        const unitChat = await UnitChat.findById(chat.unit);
-        if (!unitChat) {
-          console.log(`[Backend] Unit chat reference not found`, {
-            unitId: chat.unit,
-          });
-          return res
-            .status(404)
-            .json({ message: "Unit chat reference not found." });
-        }
-        const unit = await Unit.findById(unitChat.unit);
-        if (
-          !unit ||
-          (!unit.members.some((memberId) => memberId.equals(currentUserId)) &&
-            !unit.unitHead.equals(currentUserId))
-        ) {
-          console.log(`[Backend] User not authorized for unit chat`, {
-            unitId: unitChat.unit,
-            userId: currentUserId.toString(),
-            isMember: unit?.members.some((memberId) =>
-              memberId.equals(currentUserId)
-            ),
-            isUnitHead: unit?.unitHead.equals(currentUserId),
-          });
-          return res
-            .status(403)
-            .json({
-              message:
-                "You must be a unit member or head to view messages in this chat.",
-            });
-        }
-      } else if (chat.chatType === "department") {
-        const department = await Department.findById(chat.department);
-        if (!department) {
-          console.log(`[Backend] Department not found`, {
-            departmentId: chat.department,
-          });
-          return res.status(404).json({ message: "Department not found." });
-        }
-        if (
-          !department.members.some((memberId) => memberId.equals(currentUserId))
-        ) {
-          console.log(`[Backend] User not authorized for department chat`, {
-            departmentId: chat.department,
-            userId: currentUserId.toString(),
-            isMember: department.members.some((memberId) =>
-              memberId.equals(currentUserId)
-            ),
-          });
-          return res
-            .status(403)
-            .json({
-              message:
-                "You must be a department member to view messages in this chat.",
-            });
-        }
-      } else if (
-        chat.chatType === "private" &&
-        !chat.participants.some((p) => p.equals(currentUserId))
-      ) {
-        console.log(`[Backend] User not authorized for private chat`, {
+      // Ensure the Unit's chatId matches the Chat document
+      if (!unit.chatId || !unit.chatId.equals(chatId)) {
+        console.log(`[Backend] Updating Unit chatId to match Chat`, {
+          unitId: unit._id,
           chatId,
+        });
+        unit.chatId = chatId;
+        await unit.save();
+      }
+
+      if (
+        !unit.members.some((memberId) => memberId.equals(currentUserId)) &&
+        !unit.unitHead.equals(currentUserId)
+      ) {
+        console.log(`[Backend] User not authorized for unit chat`, {
+          unitId: unit._id,
           userId: currentUserId.toString(),
-          participants: chat.participants.map((p) => p.toString()),
+          isMember: unit.members.some((memberId) => memberId.equals(currentUserId)),
+          isUnitHead: unit.unitHead.equals(currentUserId),
         });
         return res
           .status(403)
           .json({
-            message: "You are not authorized to view messages in this chat.",
+            message: "You must be a unit member or head to view messages in this chat.",
           });
       }
-
-      // Mark all received messages as read & reset unread count
-      await Promise.all([
-        Message.updateMany(
-          {
-            chat: chatId,
-            sender: { $ne: currentUserId },
-            "readBy.user": { $ne: currentUserId },
-          },
-          { $addToSet: { readBy: { user: currentUserId, readAt: Date.now() } } }
-        ),
-        Chat.findOneAndUpdate(
-          { _id: chatId, "unreadCounts.user": currentUserId },
-          { $set: { "unreadCounts.$.count": 0 } },
-          { new: true }
-        ),
-      ]);
-
-      // Build message filter
-      let filter = { chat: chatId };
-      if (beforeId && mongoose.Types.ObjectId.isValid(beforeId)) {
-        filter._id = { $lt: new mongoose.Types.ObjectId(beforeId) };
-        console.log(
-          `[Backend] Using _id filter: ${JSON.stringify(filter._id)}`
-        );
-      } else if (beforeId) {
-        console.warn(
-          `[Backend] Invalid beforeId received: ${beforeId}. Skipping _id filter.`
-        );
-      } else {
-        console.log(
-          `[Backend] No beforeId provided. Fetching latest messages.`
-        );
+    } else if (chat.chatType === "department") {
+      const department = await Department.findById(chat.department);
+      if (!department) {
+        console.log(`[Backend] Department not found`, {
+          departmentId: chat.department,
+        });
+        return res.status(404).json({ message: "Department not found." });
       }
-
-      // Fetch messages + 1 extra to determine `hasMore`
-      const fetchedMessages = await Message.find(filter)
-        .sort({ createdAt: -1 })
-        .limit(limit + 1)
-        .populate("sender", "userName firstName lastName userImage")
-        .populate({
-          path: "reactions.user",
-          select: "userName firstName lastName",
-        })
-        .populate({
-          path: "replyTo",
-          select: "messageText sender",
-          populate: { path: "sender", select: "userName" },
-        })
-        .populate({
-          path: "post",
-          populate: {
-            path: "user",
-            select: "userName firstName lastName userImage",
-          },
-        })
-        .lean();
-
-      const hasMore = fetchedMessages.length > limit;
-      const messagesToReturn = fetchedMessages.slice(0, limit).reverse();
-
-      console.log(`[Backend] Messages fetched`, {
+      if (!department.members.some((memberId) => memberId.equals(currentUserId))) {
+        console.log(`[Backend] User not authorized for department chat`, {
+          departmentId: chat.department,
+          userId: currentUserId.toString(),
+          isMember: department.members.some((memberId) => memberId.equals(currentUserId)),
+        });
+        return res
+          .status(403)
+          .json({
+            message: "You must be a department member to view messages in this chat.",
+          });
+      }
+    } else if (
+      chat.chatType === "private" &&
+      !chat.participants.some((p) => p.equals(currentUserId))
+    ) {
+      console.log(`[Backend] User not authorized for private chat`, {
         chatId,
-        messageCount: messagesToReturn.length,
-        hasMore,
+        userId: currentUserId.toString(),
+        participants: chat.participants.map((p) => p.toString()),
       });
-
-      return res.status(200).json({
-        success: true,
-        messages: messagesToReturn,
-        hasMore,
-      });
-    } catch (error) {
-      console.error("[Backend] Error retrieving messages:", {
-        message: error.message,
-        stack: error.stack,
-      });
-      return res.status(500).json({
-        success: false,
-        message: "Internal server error retrieving messages.",
-        error: error.message,
-      });
+      return res
+        .status(403)
+        .json({
+          message: "You are not authorized to view messages in this chat.",
+        });
     }
-  };
+
+    // Mark all received messages as read & reset unread count
+    await Promise.all([
+      Message.updateMany(
+        {
+          chat: chatId,
+          sender: { $ne: currentUserId },
+          "readBy.user": { $ne: currentUserId },
+        },
+        { $addToSet: { readBy: { user: currentUserId, readAt: Date.now() } } }
+      ),
+      Chat.findOneAndUpdate(
+        { _id: chatId, "unreadCounts.user": currentUserId },
+        { $set: { "unreadCounts.$.count": 0 } },
+        { new: true }
+      ),
+    ]);
+
+    // Build message filter
+    let filter = { chat: chatId };
+    if (beforeId && mongoose.Types.ObjectId.isValid(beforeId)) {
+      filter._id = { $lt: new mongoose.Types.ObjectId(beforeId) };
+      console.log(`[Backend] Using _id filter: ${JSON.stringify(filter._id)}`);
+    } else if (beforeId) {
+      console.warn(`[Backend] Invalid beforeId received: ${beforeId}. Skipping _id filter.`);
+    } else {
+      console.log(`[Backend] No beforeId provided. Fetching latest messages.`);
+    }
+
+    // Fetch messages + 1 extra to determine `hasMore`
+    const fetchedMessages = await Message.find(filter)
+      .sort({ createdAt: -1 })
+      .limit(limit + 1)
+      .populate("sender", "userName firstName lastName userImage")
+      .populate({
+        path: "reactions.user",
+        select: "userName firstName lastName",
+      })
+      .populate({
+        path: "replyTo",
+        select: "messageText sender",
+        populate: { path: "sender", select: "userName" },
+      })
+      .populate({
+        path: "post",
+        populate: {
+          path: "user",
+          select: "userName firstName lastName userImage",
+        },
+      })
+      .lean();
+
+    const hasMore = fetchedMessages.length > limit;
+    const messagesToReturn = fetchedMessages.slice(0, limit).reverse();
+
+    console.log(`[Backend] Messages fetched`, {
+      chatId,
+      messageCount: messagesToReturn.length,
+      hasMore,
+    });
+
+    return res.status(200).json({
+      success: true,
+      messages: messagesToReturn,
+      hasMore,
+    });
+  } catch (error) {
+    console.error("[Backend] Error retrieving messages:", {
+      message: error.message,
+      stack: error.stack,
+    });
+    return res.status(500).json({
+      success: false,
+      message: "Internal server error retrieving messages.",
+      error: error.message,
+    });
+  }
+};
 
   const deleteMessage = async (req, res) => {
     try {
@@ -1940,6 +2117,8 @@ const sendMessage = async (req, res) => {
     getCombinedChatlist,
     createDepartmentChat,
     getDepartmentChat,
+    createUnitChat,
+    getUnitChat
   };
 };
 

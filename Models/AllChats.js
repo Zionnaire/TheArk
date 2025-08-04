@@ -18,7 +18,7 @@ const chatSchema = new mongoose.Schema({
   },
   unit: {
     type: mongoose.Schema.Types.ObjectId,
-    ref: 'UnitChat',
+    ref: 'Unit',
     required: function() { return this.chatType === 'unit'; }
   },
   department: {
