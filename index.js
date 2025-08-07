@@ -80,120 +80,96 @@ const refreshRouter = require("./Routes/refreshToken");
 const validationRouter = require("./Routes/validation");
 const notificationRouter = require("./Routes/notification");
 
-// --- Socket.io Connection Logic ---
 io.on("connection", (socket) => {
-  console.log(`User connected: ${socket.id}`); // Frontend should emit 'authenticate'
+  console.log(`User connected: ${socket.id}`);
 
   socket.on("authenticate", (userId) => {
     if (userId) {
       socket.userId = userId;
-      if (!io.userSocketMap.has(userId)) {
-        io.userSocketMap.set(userId, new Set());
-      }
+      if (!io.userSocketMap.has(userId)) io.userSocketMap.set(userId, new Set());
       io.userSocketMap.get(userId).add(socket.id);
-      console.log(
-        `User ${userId} registered with socket ${
-          socket.id
-        }. Total sockets for user: ${io.userSocketMap.get(userId).size}`
-      );
-      socket.join(userId); // Join user's personal room for direct notifications
+      console.log(`User ${userId} registered with socket ${socket.id}. Total sockets for user: ${io.userSocketMap.get(userId).size}`);
+      socket.join(userId);
       console.log(`Socket ${socket.id} joined personal room: ${userId}`);
     } else {
-      console.warn(
-        `Attempted to register user with undefined userId for socket: ${socket.id}`
-      );
+      console.warn(`Attempted to register user with undefined userId for socket: ${socket.id}`);
       socket.disconnect(true);
     }
     console.log("Current userSocketMap:", [...io.userSocketMap.entries()]);
-  }); // Frontend should emit 'joinRoom'
+  });
 
   socket.on("joinRoom", (chatId) => {
     if (chatId) {
       socket.join(chatId);
-      console.log(
-        `Socket ${socket.id} joined chat room: ${chatId}. Room size: ${
-          io.sockets.adapter.rooms.get(chatId)?.size || 0
-        }`
-      );
+      console.log(`Socket ${socket.id} joined chat room: ${chatId}. Room size: ${io.sockets.adapter.rooms.get(chatId)?.size || 0}`);
     } else {
-      console.warn(
-        `Attempted to join undefined chatId for socket ${socket.id}`
-      );
+      console.warn(`Attempted to join undefined chatId for socket ${socket.id}`);
     }
-  }); // Frontend should emit 'leaveRoom'
+  });
 
   socket.on("leaveRoom", (chatId) => {
     if (chatId) {
       socket.leave(chatId);
-      console.log(
-        `Socket ${socket.id} left chat room: ${chatId}. Room size: ${
-          io.sockets.adapter.rooms.get(chatId)?.size || 0
-        }`
-      );
+      console.log(`Socket ${socket.id} left chat room: ${chatId}. Room size: ${io.sockets.adapter.rooms.get(chatId)?.size || 0}`);
     } else {
-      console.warn(
-        `Attempted to leave undefined chatId for socket: ${socket.id}`
-      );
+      console.warn(`Attempted to leave undefined chatId for socket: ${socket.id}`);
     }
-  }); // Frontend should emit 'typing'
+  });
 
   socket.on("typing", ({ chatId, userId, isTyping }) => {
     socket.to(chatId).emit("userTyping", { userId, chatId, isTyping });
     console.log(`User ${userId} isTyping=${isTyping} in chat ${chatId}`);
-  }); // Frontend should emit 'markAsRead'
+  });
 
- socket.on("markAsRead", async ({ messageId, readerId, chatId }) => {
-  try {
-    if (!readerId) {
-      console.warn(`[Socket] Socket ${socket.id} attempted to mark message as read without readerId.`);
-      return socket.emit("error", "Authentication required to mark messages as read.");
+  socket.on("markAsRead", async ({ messageId, readerId, chatId }) => {
+    try {
+      if (!readerId) {
+        console.warn(`[Socket] Socket ${socket.id} attempted to mark message as read without readerId.`);
+        return socket.emit("error", "Authentication required to mark messages as read.");
+      }
+      if (!messageId || !chatId) {
+        console.warn(`[Socket] Missing messageId or chatId for markAsRead from socket ${socket.id}.`);
+        return socket.emit("error", "Invalid request for marking message as read.");
+      }
+
+      const updatedMessage = await Message.findByIdAndUpdate(
+        messageId,
+        { $addToSet: { readBy: { user: readerId, readAt: Date.now() } } },
+        { new: true }
+      );
+      if (!updatedMessage) {
+        console.warn(`[Socket] Message ${messageId} not found for marking as read.`);
+        return socket.emit("error", "Message not found.");
+      }
+
+      await Chat.findOneAndUpdate(
+        { _id: chatId, 'unreadCounts.user': readerId },
+        { $set: { 'unreadCounts.$.count': 0 } },
+        { new: true }
+      );
+
+      console.log(`[Socket] Message ${messageId} in chat ${chatId} marked as read by ${readerId}.`);
+      io.to(chatId).emit("messageRead", {
+        messageId: updatedMessage._id.toString(),
+        chatId,
+        readerId,
+        readBy: updatedMessage.readBy.map((entry) => ({
+          user: entry.user.toString(),
+          readAt: entry.readAt.toISOString(),
+        })),
+      });
+    } catch (error) {
+      console.error("[Socket] Error marking message as read:", error);
+      socket.emit("error", "Failed to mark message as read.");
     }
-    if (!messageId || !chatId) {
-      console.warn(`[Socket] Missing messageId or chatId for markAsRead from socket ${socket.id}.`);
-      return socket.emit("error", "Invalid request for marking message as read.");
-    }
+  });
 
-    const updatedMessage = await Message.findByIdAndUpdate(
-      messageId,
-      { $addToSet: { readBy: { user: readerId, readAt: Date.now() } } },
-      { new: true }
-    );
-    if (!updatedMessage) {
-      console.warn(`[Socket] Message ${messageId} not found for marking as read.`);
-      return socket.emit("error", "Message not found.");
-    }
-
-    await Chat.findOneAndUpdate(
-      { _id: chatId, 'unreadCounts.user': readerId },
-      { $set: { 'unreadCounts.$.count': 0 } },
-      { new: true }
-    );
-
-    console.log(`[Socket] Message ${messageId} in chat ${chatId} marked as read by ${readerId}.`);
-    io.to(chatId).emit("messageRead", {
-      messageId: updatedMessage._id.toString(),
-      chatId,
-      readerId,
-      readBy: updatedMessage.readBy.map((entry) => ({
-        user: entry.user.toString(),
-        readAt: entry.readAt.toISOString(),
-      })),
-    });
-  } catch (error) {
-    console.error("[Socket] Error marking message as read:", error);
-    socket.emit("error", "Failed to mark message as read.");
-  }
-});
-
-// --- NEW: Server-side emits for Reaction Updates and Notifications ---
-socket.on("addMessageReaction", async (data) => {
-    // ... database logic to add reaction ...
-    const { messageId, chatId, reactorId, reactionType, updatedReactions } =
-      data;
+  socket.on("addMessageReaction", async (data) => {
+    const { messageId, chatId, reactorId, reactionType, updatedReactions } = data;
     io.to(chatId).emit("messageReactionUpdated", {
       messageId,
       chatId,
-      reactions: updatedReactions, // Array of { user, type }
+      reactions: updatedReactions,
       reactionAction: "added",
       reactorId,
       reactionType,
@@ -201,48 +177,180 @@ socket.on("addMessageReaction", async (data) => {
   });
 
   socket.on("removeMessageReaction", async (data) => {
-    // ... database logic to remove reaction ...
-    const { messageId, chatId, reactorId, reactionType, updatedReactions } =
-      data;
+    const { messageId, chatId, reactorId, reactionType, updatedReactions } = data;
     io.to(chatId).emit("messageReactionUpdated", {
       messageId,
       chatId,
-      reactions: updatedReactions, // Array of { user, type }
+      reactions: updatedReactions,
       reactionAction: "removed",
       reactorId,
       reactionType,
     });
-  }); // For example, when a new notification is generated:
-
-  socket.on("generateNotification", async (notificationData) => {
-    // ... database logic to save notification ...
-    // Ensure notificationData matches the NotificationEventData interface
-    io.to(notificationData.recipientId).emit(
-      "newNotification",
-      notificationData
-    );
   });
 
   socket.on("receive_comment", (data) => {
     const { postId, comment } = data;
-    console.log(`Comment received for post ${postId}:`, comment); // Emit the comment to the post's room
+    console.log(`Comment received for post ${postId}:`, comment);
     io.to(postId).emit("receive_comment", { postId, comment });
   });
 
   socket.on("receive_reply", (data) => {
     const { commentId, reply } = data;
-    console.log(`Reply received for comment ${commentId}:`, reply); // Emit the reply to the comment's room
+    console.log(`Reply received for comment ${commentId}:`, reply);
     io.to(commentId).emit("receive_reply", { commentId, reply });
   });
 
   socket.on("update_comment_like", (data) => {
     const { commentId, likedByUser, likesCount } = data;
-    console.log(`Likes updated for comment ${commentId}:`, likedByUser); // Emit the updated likes to the comment's room
-    io.to(commentId).emit("update_comment_like", {
-      commentId,
-      likesCount,
-      likedByUser,
-    });
+    console.log(`Likes updated for comment ${commentId}:`, likedByUser);
+    io.to(commentId).emit("update_comment_like", { commentId, likesCount, likedByUser });
+  });
+
+  socket.on("sendMessage", async (payload) => {
+    try {
+      const { chatId, text, sender, image, video } = payload;
+      const chat = await Chat.findById(chatId);
+
+      if (!chat) throw new Error("Chat not found");
+
+      let attachments = [];
+      if (image) attachments.push({ url: image, cld_id: "temp_cld_id", type: "image" }); // Replace with actual Cloudinary upload logic
+      if (video) attachments.push({ url: video, cld_id: "temp_cld_id", type: "video" }); // Replace with actual Cloudinary upload logic
+
+      const message = new Message({
+        chat: chatId,
+        sender,
+        messageText: text || "",
+        attachments,
+        contentType: text ? "text" : (image || video ? "attachment" : "text"),
+        readBy: [{ user: sender, readAt: Date.now() }],
+        status: "sent",
+      });
+      await message.save();
+
+      // Update chat's lastMessage and unreadCounts
+      chat.lastMessageText = text || (attachments.length ? "Attachment" : "");
+      chat.lastMessageAt = message.createdAt;
+      chat.unreadCounts = chat.unreadCounts || [];
+      chat.participants.forEach((participantId) => {
+        const unreadEntry = chat.unreadCounts.find((uc) => uc.user.toString() === participantId.toString());
+        if (unreadEntry) {
+          if (participantId.toString() !== sender) unreadEntry.count += 1;
+        } else if (participantId.toString() !== sender) {
+          chat.unreadCounts.push({ user: participantId, count: 1 });
+        }
+      });
+      await chat.save();
+
+      io.to(chatId).emit("receiveMessage", {
+        _id: message._id,
+        chatId,
+        sender,
+        messageText: message.messageText,
+        attachments: message.attachments,
+        contentType: message.contentType,
+        createdAt: message.createdAt,
+        readBy: message.readBy,
+      });
+
+      // Create and emit notification for all participants except sender
+      const chatType = chat.type || "private"; // Adjust based on your Chat model
+      chat.participants.forEach(async (participantId) => {
+        if (participantId.toString() !== sender) {
+          const notificationMessage = text ? `${text.substring(0, 50)}${text.length > 50 ? "..." : ""}` : "New attachment received";
+          const chatContext = {
+            chatId: chat._id,
+            model: chatType === "unit" ? "UnitChat" : chatType === "department" ? "DepartmentChat" : "PrivateChat",
+            type: chatType,
+            name: chat.name || (await User.findById(participantId)).userName || "Chat"
+          };
+          const notification = new Notification({
+            type: "message",
+            recipient: participantId,
+            sender,
+            message: notificationMessage,
+            title: "New Message",
+            referenceModel: "Message",
+            chat: chat._id,
+            chatContext,
+            metadata: { messageId: message._id }
+          });
+          await notification.save();
+
+          const populatedNotification = await Notification.findById(notification._id)
+            .populate("sender", "firstName lastName userName userImage");
+          io.to(participantId.toString()).emit("newNotification", {
+            _id: populatedNotification._id.toString(),
+            type: populatedNotification.type,
+            message: populatedNotification.message,
+            read: populatedNotification.read,
+            title: populatedNotification.title,
+            createdAt: populatedNotification.createdAt.toISOString(),
+            sender: {
+              _id: populatedNotification.sender?._id.toString(),
+              userName: populatedNotification.sender?.userName || '',
+              firstName: populatedNotification.sender?.firstName || '',
+              lastName: populatedNotification.sender?.lastName || '',
+              userImage: populatedNotification.sender?.userImage?.[0]?.url || ''
+            },
+            referenceId: message._id.toString(),
+            chat: populatedNotification.chat ? {
+              _id: populatedNotification.chat.toString(),
+              type: chatContext.type,
+              name: chatContext.name
+            } : null
+          });
+        }
+      });
+    } catch (error) {
+      console.error("[Socket] Error sending message:", error);
+      socket.emit("error", "Failed to send message.");
+    }
+  });
+
+  socket.on("generateNotification", async (notificationData) => {
+    try {
+      const { type, recipientId, senderId, message, title, referenceId, chat } = notificationData;
+      const notification = new Notification({
+        type,
+        recipient: recipientId,
+        sender: senderId,
+        message: message || "",
+        title: title || "New Notification",
+        referenceModel: "Message", // Adjust based on context
+        chat,
+        read: false,
+        createdAt: new Date()
+      });
+      await notification.save();
+
+      const populatedNotification = await Notification.findById(notification._id)
+        .populate("sender", "firstName lastName userName userImage");
+      io.to(recipientId.toString()).emit("newNotification", {
+        _id: populatedNotification._id.toString(),
+        type: populatedNotification.type,
+        message: populatedNotification.message,
+        read: populatedNotification.read,
+        title: populatedNotification.title,
+        createdAt: populatedNotification.createdAt.toISOString(),
+        sender: {
+          _id: populatedNotification.sender?._id.toString(),
+          userName: populatedNotification.sender?.userName || '',
+          firstName: populatedNotification.sender?.firstName || '',
+          lastName: populatedNotification.sender?.lastName || '',
+          userImage: populatedNotification.sender?.userImage?.[0]?.url || ''
+        },
+        referenceId: referenceId?.toString(),
+        chat: populatedNotification.chat ? {
+          _id: populatedNotification.chat.toString(),
+          type: populatedNotification.chatContext?.type || "private",
+          name: populatedNotification.chatContext?.name || "Chat"
+        } : null
+      });
+    } catch (error) {
+      console.error("[Socket] Error generating notification:", error);
+      socket.emit("error", "Failed to generate notification.");
+    }
   });
 
   socket.on("disconnect", () => {
@@ -251,13 +359,9 @@ socket.on("addMessageReaction", async (data) => {
       io.userSocketMap.get(socket.userId).delete(socket.id);
       if (io.userSocketMap.get(socket.userId).size === 0) {
         io.userSocketMap.delete(socket.userId);
-        console.log(
-          `User ${socket.userId} removed from map (all sockets disconnected).`
-        );
+        console.log(`User ${socket.userId} removed from map (all sockets disconnected).`);
       }
-      console.log(
-        `User ${socket.userId} removed socket ${socket.id} from map.`
-      );
+      console.log(`User ${socket.userId} removed socket ${socket.id} from map.`);
     }
   });
 });

@@ -460,10 +460,7 @@ res.status(200).json({
     res.status(500).json({ message: "Failed to fetch unit", error: error.message });
   }
 };
-// Remove unit member
-// @desc    Remove a unit member
-// @route   PATCH /api/units/:unitId/remove-member
-// @access  Private (only unitHead)
+
 const removeUnitMember = asyncHandler(async (req, res) => {
   const { unitId } = req.params;
   const { memberId } = req.body;

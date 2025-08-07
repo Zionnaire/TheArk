@@ -14,7 +14,7 @@ chatRouter.post("/private/:recipientId", verifyToken, chatIo.createPrivateChat)
 chatRouter.post("/:chatType/:recipientId/messages", verifyToken, chatIo.sendMessage)
 chatRouter.get("/notifications", verifyToken, chatIo.getNotifications);
 chatRouter.get("/:chatId/messages", verifyToken, chatIo.getMessages);
-chatRouter.post("/createUnitChat/:unitId", verifyToken, chatIo.createUnitChat)
+chatRouter.post('/unit', verifyToken, chatIo.createUnitChat);
 chatRouter.post("/department", verifyToken, chatIo.createDepartmentChat);
 chatRouter.get("/department/:departmentId", verifyToken, chatIo.getDepartmentChat);
 chatRouter.get("/private/:recipientId/exists", verifyToken, chatIo.checkPrivateChatExists);

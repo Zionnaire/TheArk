@@ -3,152 +3,135 @@ const Post = require("../Models/post");
 const User = require("../Models/user");
 const Comment = require("../Models/comment");
 const ChatRoom = require("../Models/chatRoom")
+const ChatMessage = require("../Models/messages")
+const Notification = require("../Models/notification")
 const { uploadToCloudinary, uploadVideoToCloudinary, deleteFromCloudinary } = require("../Middlewares/cloudinaryUpload");
 const logger = require("../Middlewares/logger");
 
 const postIo = (io) => {
+    // Helper function to create and emit notifications
+  const createAndEmitNotification = async (req, recipientId, senderId, type, message, title, referenceId, chat = null) => {
+    try {
+      const notification = new Notification({
+        type,
+        recipient: recipientId,
+        sender: senderId,
+        message,
+        title,
+        referenceId,
+        chat,
+        read: false,
+        createdAt: new Date()
+      });
+      await notification.save();
 
-// Create a Post
-const createPost = async (req, res) => {
-    // Retrieve the Socket.IO instance and Mongoose models from the Express app
-    // These should be set on the app object in your main server.js file
+      const populatedNotification = await Notification.findById(notification._id)
+        .populate("sender", "firstName lastName userName userImage");
+
+      req.io?.to(recipientId.toString()).emit("newNotification", {
+        _id: populatedNotification._id.toString(),
+        type: populatedNotification.type,
+        message: populatedNotification.message,
+        read: populatedNotification.read,
+        title: populatedNotification.title,
+        createdAt: populatedNotification.createdAt.toISOString(),
+        sender: {
+          _id: populatedNotification.sender?._id.toString(),
+          userName: populatedNotification.sender?.userName || '',
+          firstName: populatedNotification.sender?.firstName || '',
+          lastName: populatedNotification.sender?.lastName || '',
+          userImage: populatedNotification.sender?.userImage?.[0]?.url || ''
+        },
+        referenceId: populatedNotification.referenceId?.toString(),
+        chat: populatedNotification.chat
+      });
+      console.log(`Emitted 'newNotification' to ${recipientId} for ${type}`);
+    } catch (error) {
+      console.error(`[Notification] Error creating notification: ${error.message}`);
+    }
+  };
+
+  // Create a Post
+  const createPost = async (req, res) => {
     const io = req.app.get('io');
-    const NotificationModel = req.app.get('Notification'); // Using a different variable name to avoid conflict with constructor
-    const UserModel = req.app.get('User'); // Using a different variable name
+    const NotificationModel = req.app.get('Notification');
+    const UserModel = req.app.get('User');
 
     try {
-        const { content } = req.body;
-        const userId = req.user._id; // Get user ID from the authenticated request
+      const { content } = req.body;
+      const userId = req.user._id;
 
-        let images = [];
-        let videos = [];
+      let images = [];
+      let videos = [];
 
-        // 1. Validate User Exists
-        const user = await UserModel.findById(userId).select('firstName lastName userName userImage followers');
-        if (!user) {
-            // If user somehow doesn't exist, log and return error
-            console.error(`User with ID ${userId} not found for post creation.`);
-            return res.status(404).json({ message: "User not found" });
+      const user = await UserModel.findById(userId).select('firstName lastName userName userImage followers');
+      if (!user) {
+        console.error(`User with ID ${userId} not found for post creation.`);
+        return res.status(404).json({ message: "User not found" });
+      }
+
+      let imageFiles = req.files?.images;
+      if (imageFiles) {
+        if (!Array.isArray(imageFiles)) imageFiles = [imageFiles];
+        for (const file of imageFiles) {
+          const result = await uploadToCloudinary(file.data, 'post_uploads');
+          images.push({ url: result.secure_url, cld_id: result.public_id });
         }
+      }
 
-        // 2. Handle File Uploads (Images)
-        let imageFiles = req.files?.images;
-        if (imageFiles) {
-            // Ensure imageFiles is always an array for consistent iteration
-            if (!Array.isArray(imageFiles)) {
-                imageFiles = [imageFiles];
-            }
-            for (const file of imageFiles) {
-                // Assuming uploadToCloudinary takes a buffer (file.data) and returns { secure_url, public_id }
-                const result = await uploadToCloudinary(file.data, 'post_uploads');
-                images.push({ url: result.secure_url, cld_id: result.public_id });
-            }
+      let videoFiles = req.files?.videos;
+      if (videoFiles) {
+        if (!Array.isArray(videoFiles)) videoFiles = [videoFiles];
+        for (const file of videoFiles) {
+          const result = await uploadVideoToCloudinary(file.data, 'post_uploads');
+          videos.push({ url: result.videoUrl, cld_id: result.videoCldId });
         }
+      }
 
-        // 3. Handle File Uploads (Videos)
-        let videoFiles = req.files?.videos;
-        if (videoFiles) {
-            // Ensure videoFiles is always an array
-            if (!Array.isArray(videoFiles)) {
-                videoFiles = [videoFiles];
-            }
-            for (const file of videoFiles) {
-                // Assuming uploadVideoToCloudinary takes a buffer and returns { videoUrl, videoCldId }
-                const result = await uploadVideoToCloudinary(file.data, 'post_uploads');
-                videos.push({ url: result.videoUrl, cld_id: result.videoCldId });
-            }
+      const newPost = new Post({
+        user: userId,
+        content,
+        images,
+        videos,
+        comments: [],
+        likes: [],
+        unlikes: [],
+        reactions: [],
+        commentCount: 0,
+      });
+
+      await newPost.save();
+
+      const populatedPost = await Post.findById(newPost._id)
+        .populate('user', 'firstName lastName userName userImage')
+        .lean();
+
+      if (populatedPost && populatedPost.user && populatedPost.user.userImage && Array.isArray(populatedPost.user.userImage)) {
+        populatedPost.user.userImage = populatedPost.user.userImage.map(img => ({
+          url: img.url,
+          cld_id: img.cld_id || ''
+        }));
+      }
+
+      if (io && populatedPost) {
+        io.emit('newPost', populatedPost);
+        console.log(`Emitted 'newPost' for post ID: ${populatedPost._id}`);
+      }
+
+      if (user.followers && user.followers.length > 0 && io) {
+        for (const followerId of user.followers) {
+          await createAndEmitNotification(req, followerId, userId, 'new_post',
+            `${user.firstName} ${user.lastName} posted something new!`,
+            "New Post", populatedPost._id);
         }
+      }
 
-        // 4. Create and Save the New Post
-        const newPost = new Post({
-            user: userId, // Store the ID of the user who created the post
-            content,
-            images,
-            videos,
-            comments: [], // Initialize empty arrays
-            likes: [],
-            unlikes: [],
-            reactions: [],
-            commentCount: 0, // Initialize comment count
-        });
-
-        await newPost.save(); // Save the post to the database
-
-        // 5. Populate Post with User Details for Frontend Display
-        // Fetch the newly created post and populate its 'user' field
-        const populatedPost = await Post.findById(newPost._id)
-            .populate('user', 'firstName lastName userName userImage') // Select fields needed for FeedCard and notifications
-            .lean(); // Use .lean() for a plain JavaScript object, better performance for Socket.IO emission
-
-        if (!populatedPost) {
-            console.error(`Failed to retrieve populated post after creation for post ID: ${newPost._id}`);
-            // Continue execution; the `res.status(201)` will send `newPost` if `populatedPost` is null
-        }
-
-        // Ensure userImage is correctly formatted (array of {url, cld_id}) if `userImage` is present
-        if (populatedPost && populatedPost.user && populatedPost.user.userImage && Array.isArray(populatedPost.user.userImage)) {
-            populatedPost.user.userImage = populatedPost.user.userImage.map(img => ({
-                url: img.url,
-                cld_id: img.cld_id || '' // Ensure cld_id is handled
-            }));
-        }
-
-        // 6. Emit 'newPost' Event for Live Feed Updates
-        // This will broadcast the new post to all connected clients (e.g., FeedScreen)
-        if (io && populatedPost) {
-            io.emit('newPost', populatedPost);
-            console.log(`Emitted 'newPost' for post ID: ${populatedPost._id}`);
-        }
-
-        // 7. Notify Followers of the New Post
-        if (user.followers && user.followers.length > 0 && io) {
-            for (const followerId of user.followers) {
-                // Create a persistent notification record in the database
-                const notificationRecord = new NotificationModel({ // Use NotificationModel as retrieved
-                    recipient: followerId, // The follower who receives the notification
-                    sender: userId, // The user who created the post
-                    type: 'new_post', // Type of notification
-                    message: `${user.firstName} ${user.lastName} posted something new!`,
-                    read: false, // Mark as unread by default
-                    chat: null, // Not a chat notification
-                    friendRequest: null, // Not a friend request notification
-                    referenceModel: 'Post', // The model this notification refers to
-                    metadata: {
-                        postId: populatedPost._id.toString(), // Store the ID of the new post
-                    },
-                });
-                await notificationRecord.save();
-
-                // Emit a real-time 'newNotification' event to the follower's specific Socket.IO room
-                // The frontend client must be authenticated and join a room named after their `userId`.
-                io.to(followerId.toString()).emit('newNotification', {
-                    _id: notificationRecord._id.toString(), // Notification ID
-                    type: 'new_post',
-                    message: notificationRecord.message,
-                    read: notificationRecord.read,
-                    title: "New Post", // Title for frontend display (e.g., Toast)
-                    createdAt: notificationRecord.createdAt,
-                    sender: { // Details of the user who posted
-                        _id: user._id.toString(),
-                        userName: user.userName || '',
-                        firstName: user.firstName || '',
-                        lastName: user.lastName || '',
-                        userImage: user.userImage?.[0]?.url || '', // URL of sender's profile image
-                    },
-                    referenceId: populatedPost._id.toString(), // ID of the referenced post for frontend navigation
-                    chat: null, // Not a chat notification
-                });
-                console.log(`Emitted 'newNotification' to follower ${followerId} for new post by ${userId}`);
-            }
-        }
-
-        // 8. Send HTTP Response
-        res.status(201).json({ message: "Post created successfully", post: populatedPost || newPost });
+      res.status(201).json({ message: "Post created successfully", post: populatedPost || newPost });
     } catch (error) {
-        console.error(`Error creating post: ${error.message}`);
-        res.status(500).json({ message: error.message || "Failed to create post." });
+      console.error(`Error creating post: ${error.message}`);
+      res.status(500).json({ message: error.message || "Failed to create post." });
     }
-};
+  };
 
 
 // Search & filter posts
@@ -255,8 +238,8 @@ const editPost = async (req, res) => {
 };
 
 // Create a Comment
-  const createComment = async (req, res) => {
-     const io = req.app.get('io'); 
+ const createComment = async (req, res) => {
+    const io = req.app.get('io');
     try {
       const { text } = req.body;
       const postId = req.params.postId;
@@ -268,26 +251,15 @@ const editPost = async (req, res) => {
         return res.status(400).json({ error: "Invalid post ID" });
       }
 
-      const post = await Post.findByIdAndUpdate(postId, { $inc: { commentsCount: 1 } });
-
-      // console.log("Post found:", post);
-      // console.log("Post ID:", postId);
+      const post = await Post.findByIdAndUpdate(postId, { $inc: { commentCount: 1 } });
       if (!post) return res.status(404).json({ message: "Post not found" });
-
-      // console.log("Incoming comment body:", req.body);
 
       if (req.file) {
         if (req.file.mimetype.startsWith("image")) {
-          const result = await uploadToCloudinary(
-            req.file.buffer,
-            "comments_uploads"
-          );
+          const result = await uploadToCloudinary(req.file.buffer, "comments_uploads");
           imageUrl = result.secure_url;
         } else if (req.file.mimetype.startsWith("video")) {
-          const result = await uploadVideoToCloudinary(
-            req.file.buffer,
-            "comments_uploads"
-          );
+          const result = await uploadVideoToCloudinary(req.file.buffer, "comments_uploads");
           videoUrl = result.secure_url;
         } else {
           return res.status(400).json({ message: "Invalid file type" });
@@ -296,8 +268,7 @@ const editPost = async (req, res) => {
 
       const user = await User.findById(userId);
       if (!user) return res.status(404).json({ message: "User not found" });
-      if (!text)
-        return res.status(400).json({ message: "Comment text is required" });
+      if (!text) return res.status(400).json({ message: "Comment text is required" });
 
       const comment = new Comment({
         post: postId,
@@ -318,39 +289,28 @@ const editPost = async (req, res) => {
       post.commentCount += 1;
       comment.commentCount = post.commentCount;
       await comment.populate("user", "firstName lastName userName avatar");
-
       await comment.save();
       await post.save({ validateModifiedOnly: true });
 
-       console.log("Comment to be added to post:", "Comment:", comment.text,  post.commentCount, comment.commentCount); // Log the comment details
+      io.to(postId).emit("receive_comment", {
+        updatedPost: { ...post.toObject(), comments: post.comments },
+        commentCount: post.commentCount,
+        postId,
+      });
 
-       console.log("Emitting comment to post room:", postId );
-       
-io.to(postId).emit("receive_comment", {
-  updatedPost: {
-    ...post.toObject(),
-    comments: post.comments,
-  },
-  commentCount: post.commentCount,
-  postId,
-});
-
-
-       console.log("Comment added to post:", "Comment:", comment.text,  post.commentCount, comment.commentCount); // Log the comment details
-
-res.status(201).json({
-  message: "Comment added",
-  comment,
-  postId: postId || post._id,
-  commentCount: post.commentCount, // 👈 Add this line
-});
-       console.log("Comment added successfully", comment, post);
+      res.status(201).json({
+        message: "Comment added",
+        comment,
+        postId: postId || post._id,
+        commentCount: post.commentCount,
+      });
     } catch (error) {
       logger.error(error);
       console.error("Content Error:", error.message);
       res.status(500).json({ message: error.message });
     }
   };
+
 const getCommentsForPost = async (req, res) => {
    const io = req.app.get('io'); 
   try {
@@ -619,80 +579,85 @@ const sharePostToPage = async (req, res) => {
   }
 };
 
-const sharePostToChat = async (req, res) => {
-  try {
-    const { postId } = req.params;
-    const { recipientIds } = req.body; // array of user IDs
-    const senderId = req.user._id;
+  const sharePostToChat = async (req, res) => {
+    try {
+      const { postId } = req.params;
+      const { recipientIds } = req.body; // array of user IDs
+      const senderId = req.user._id;
 
-    if (!Array.isArray(recipientIds) || recipientIds.length === 0) {
-      return res.status(400).json({ message: "Recipients are required" });
-    }
-
-    const originalPost = await Post.findById(postId);
-    if (!originalPost) {
-      return res.status(404).json({ message: "Original post not found" });
-    }
-
-    const sharedPostPayload = {
-      user: senderId,
-      content: originalPost.content,
-      images: originalPost.images,
-      videos: originalPost.videos,
-      sharedFrom: originalPost._id,
-      sharedTo: "chat",
-    };
-
-    const sharedResults = [];
-
-    for (const recipientId of recipientIds) {
-      // 1. Find or create a 1-on-1 chat room
-      let chatRoom = await ChatRoom.findOne({
-        isGroupChat: false,
-        participants: { $all: [senderId, recipientId] },
-      });
-
-      if (!chatRoom) {
-        chatRoom = new ChatRoom({
-          isGroupChat: false,
-          participants: [senderId, recipientId],
-        });
-        await chatRoom.save();
+      if (!Array.isArray(recipientIds) || recipientIds.length === 0) {
+        return res.status(400).json({ message: "Recipients are required" });
       }
 
-      // 2. Create a message in the chat with shared post data
-      const message = new ChatMessage({
-        sender: senderId,
-        chatRoom: chatRoom._id,
-        type: 'shared_post',
-        post: sharedPostPayload,
-      });
+      const originalPost = await Post.findById(postId);
+      if (!originalPost) {
+        return res.status(404).json({ message: "Original post not found" });
+      }
 
-      await message.save();
+      const sharedPostPayload = {
+        user: senderId,
+        content: originalPost.content,
+        images: originalPost.images,
+        videos: originalPost.videos,
+        sharedFrom: originalPost._id,
+        sharedTo: "chat",
+      };
 
-      // 3. Optional: emit socket event if using socket.io
-      const io = req.app.get('io');
-      io?.to(recipientId.toString()).emit("newMessage", {
-        chatRoomId: chatRoom._id,
-        message,
-      });
+      const sharedResults = [];
 
-      sharedResults.push({
-        recipientId,
-        chatRoomId: chatRoom._id,
-        messageId: message._id,
+      for (const recipientId of recipientIds) {
+        let chatRoom = await ChatRoom.findOne({
+          isGroupChat: false,
+          participants: { $all: [senderId, recipientId] },
+        });
+
+        if (!chatRoom) {
+          chatRoom = new ChatRoom({
+            isGroupChat: false,
+            participants: [senderId, recipientId],
+          });
+          await chatRoom.save();
+        }
+
+        const message = new ChatMessage({
+          sender: senderId,
+          chatRoom: chatRoom._id,
+          type: 'shared_post',
+          post: sharedPostPayload,
+        });
+        await message.save();
+
+        const io = req.app.get('io');
+        io?.to(recipientId.toString()).emit("newMessage", {
+          chatRoomId: chatRoom._id,
+          message,
+        });
+
+        // Create and emit notification for the recipient
+        await createAndEmitNotification(req, recipientId, senderId, 'new_message',
+          `${req.user.userName} shared a post with you`,
+          "New Message", message._id, {
+            _id: chatRoom._id,
+            type: "private",
+            name: (await User.findById(recipientId)).userName || "Chat"
+          });
+
+        sharedResults.push({
+          recipientId,
+          chatRoomId: chatRoom._id,
+          messageId: message._id,
+        });
+      }
+
+      res.status(200).json({
+        message: "Post shared via chat",
+        shared: sharedResults,
       });
+    } catch (error) {
+      console.error(error);
+      res.status(500).json({ message: error.message });
     }
-
-    res.status(200).json({
-      message: "Post shared via chat",
-      shared: sharedResults,
-    });
-  } catch (error) {
-    console.error(error);
-    res.status(500).json({ message: error.message });
-  }
-};
+  };
 
   
   return {
