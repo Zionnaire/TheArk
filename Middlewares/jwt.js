@@ -157,6 +157,7 @@ const verifyToken = async (req, res, next) => {
               return {
                 id: chatId.toString(),
                 deptName: department ? department.deptName : "Unnamed Dept",
+                deptLogo: department ? department.deptLogo : [],
               };
             })
           )

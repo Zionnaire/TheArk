@@ -48,20 +48,23 @@ const notificationSchema = new mongoose.Schema(
       ]
     },
     chatContext: {
-      chatId: {
-        type: mongoose.Schema.Types.ObjectId,
-        refPath: "chatContext.model"
-      },
-      model: {
-        type: String,
-        enum: ["PrivateChat", "UnitChat", "DepartmentChat", "GeneralChat"]
-      },
-      type: {
-        type: String,
-        enum: ["private", "unit", "department", "general"]
-      },
-      name: { type: String },
-      image: { type: String }
+      chatId: { type: mongoose.Schema.Types.ObjectId, ref: "Chat" },
+      model: { type: String, enum: ["PrivateChat", "UnitChat", "DepartmentChat", "GeneralChat"] },
+      type: { type: String, enum: ["private", "unit", "department", "general"] },
+      name: String,
+      image: [{
+        url: { type: String, required: true },
+        cld_id: { type: String },
+        type: { type: String },
+        size: { type: Number },
+        name: { type: String },
+      }],
+      recipientId: { type: mongoose.Schema.Types.ObjectId, ref: "User" }, // Added for private chats
+       recipient: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "User",
+      required: false // Optional for admin announcements
+    },
     },
     friendRequest: {
       type: mongoose.Schema.Types.ObjectId,

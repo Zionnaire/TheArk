@@ -9,7 +9,7 @@ const { v4: uuidv4 } = require('uuid');
 
 // Create a new department
 const createDepartment = async (req, res) => {
-  const { deptName, description, unitId } = req.body;
+  const { deptName, description, unitId, deptLogo } = req.body;
   const user = req.user;
 
   console.log("departmentController: createDepartment request", {
@@ -37,7 +37,7 @@ const createDepartment = async (req, res) => {
   try {
     // Verify unit exists and belongs to user's church
     const unit = await Unit.findOne({ _id: unitId, church: user.churchId })
-      .populate("unitHead")
+      .populate("unitHead unitLogo unitName")
       .session(session);
     if (!unit) {
       console.log("departmentController: Unit not found", { unitId, churchId: user.churchId });
@@ -64,6 +64,7 @@ const createDepartment = async (req, res) => {
     // Create department
     const department = new Department({
       deptName,
+      deptLogo: unit.unitLogo || [],
       description: description || "No description provided",
       unit: unitId,
       church: user.churchId,
@@ -123,6 +124,7 @@ const createDepartment = async (req, res) => {
       department: {
         _id: updatedDepartment._id.toString(),
         deptName: updatedDepartment.deptName,
+        deptLogo: updatedDepartment.deptLogo,
         description: updatedDepartment.description,
         unit: updatedDepartment.unit._id.toString(),
         unitName: updatedDepartment.unit.unitName,
@@ -389,7 +391,7 @@ const updateDepartment = async (req, res) => {
 
     await Department.updateOne(
       { _id: departmentId },
-      { $set: { deptName, description, unit: unitId, updatedAt: new Date() } },
+      { $set: { deptName, description, deptLogo: unitLogo, unit: unitId, updatedAt: new Date() } },
       { session }
     );
 

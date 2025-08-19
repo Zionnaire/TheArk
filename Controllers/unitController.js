@@ -392,7 +392,8 @@ const getUnit = async (req, res) => {
   }
 
   try {
-const unit = await Unit.findOne({ _id: unitId, church: churchId })
+    const churchObjectId = new mongoose.Types.ObjectId(churchId); // Convert string to ObjectId
+    const unit = await Unit.findOne({ _id: unitId, church: churchObjectId }) // Use ObjectId for church
       .populate("unitHead", "userName email")
       .populate("members", "userName email")
       .populate({
@@ -401,57 +402,36 @@ const unit = await Unit.findOne({ _id: unitId, church: churchId })
         populate: { path: "members", select: "userName email" },
       });
 
-      console.log("unitController: Populated unit object before JSON response:", JSON.stringify(unit, null, 2));
-
+    console.log("unitController: Populated unit object before JSON response:", JSON.stringify(unit, null, 2));
 
     if (!unit) {
       console.log("unitController: Unit not found", { unitId, churchId });
       return res.status(404).json({ message: "Unit not found" });
     }
 
-    console.log("unitController: Unit fetched", {
-      unitId: unit._id.toString(),
-      unitName: unit.unitName,
-      unitHead: unit.unitHead ? unit.unitHead.userName : "No Head",
-      unitLogo: unit.unitLogo,
-      description: unit.description,
-      departmentCount: unit.departments?.length || 0,
-      departments: unit.departments?.map((d) => ({
-        id: d._id.toString(),
-        deptName: d.deptName,
-        description: d.description,
-        members: d.members?.filter(m => m && m._id).map((m) => m._id.toString()) || [],
-
-        chatId: d.chatId?.toString(),
-      })),
-     members: unit.members?.filter(m => m && m._id).map((m) => m._id.toString()) || [],
-
-      chatId: unit.chatId?.toString(),
+    res.status(200).json({
+      unit: {
+        _id: unit._id.toString(),
+        unitName: unit.unitName,
+        description: unit.description,
+        unitLogo: unit.unitLogo,
+        unitHead: unit.unitHead,
+        departments: unit.departments
+          ?.filter(d => d != null)
+          .map((d) => ({
+            _id: d._id.toString(),
+            deptName: d.deptName,
+            description: d.description,
+            unit: d.unit?.toString(),
+            members: d.members?.filter(m => m && m._id).map((m) => m._id.toString()) || [],
+            chatId: d.chatId?.toString(),
+          })) || [],
+        chatGroups: unit.chatGroups,
+        members: unit.members?.filter(m => m && m._id).map((m) => m._id.toString()) || [],
+        totalMembers: unit.members?.filter(m => m && m._id).length || 0,
+        chatId: unit.chatId?.toString(),
+      },
     });
-
-res.status(200).json({
-  unit: {
-    _id: unit._id.toString(),
-    unitName: unit.unitName,
-    description: unit.description,
-    unitLogo: unit.unitLogo,
-    unitHead: unit.unitHead,
-    departments: unit.departments
-      ?.filter(d => d != null) // Keep this filter
-      .map((d) => ({
-        _id: d._id.toString(),
-        deptName: d.deptName,
-        description: d.description,
-        unit: d.unit?.toString(), // <--- ADDED OPTIONAL CHAINING HERE
-        members: d.members?.filter(m => m && m._id).map((m) => m._id.toString()) || [], // This should now be fine
-        chatId: d.chatId?.toString(),
-      })) || [],
-    chatGroups: unit.chatGroups,
-    members: unit.members?.filter(m => m && m._id).map((m) => m._id.toString()) || [],
-    totalMembers: unit.members?.filter(m => m && m._id).length || 0,
-    chatId: unit.chatId?.toString(),
-  },
-});
   } catch (error) {
     console.error("unitController: Error fetching unit", {
       message: error.message,
