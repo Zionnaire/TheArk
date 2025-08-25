@@ -131,12 +131,10 @@ const chatIo = (io) => {
       }
 
       if (currentUserId === recipientId) {
-        return res
-          .status(400)
-          .json({
-            success: false,
-            message: "Cannot create a private chat with yourself.",
-          });
+        return res.status(400).json({
+          success: false,
+          message: "Cannot create a private chat with yourself.",
+        });
       }
 
       // 1. Generate the deterministic identifier for the specific PrivateChat document
@@ -260,132 +258,193 @@ const chatIo = (io) => {
           errors: errors,
         });
       }
-      return res
-        .status(500)
-        .json({
-          success: false,
-          message: "Failed to create private chat",
-          error: err.message,
-        });
+      return res.status(500).json({
+        success: false,
+        message: "Failed to create private chat",
+        error: err.message,
+      });
     }
   };
 
-const getCombinedChatlist = async (req, res) => {
+ const getCombinedChatlist = async (req, res) => {
   try {
     const userId = req.user._id;
     if (!userId) {
-      return res.status(401).json({ message: 'Unauthorized - User ID not found in request' });
+      return res
+        .status(401)
+        .json({ message: "Unauthorized - User ID not found in request" });
     }
 
-    console.log(`[Backend] getCombinedChatlist called for userId: ${userId}`);
+    console.log(`[Backend] getCombinedChatList called for userId: ${userId}`);
 
     // Fetch chats where the user is a participant
     let query = { participants: userId };
-    if (req.query.includeGeneralChat === 'true') {
-      query = { $or: [{ participants: userId }, { chatType: 'general' }] };
+    if (req.query.includeGeneralChat === "true") {
+      query = { $or: [{ participants: userId }, { chatType: "general" }] };
     }
 
     const chats = await Chat.find(query)
       .populate({
-        path: 'participants',
-        select: 'userName firstName lastName userImage isOnline',
+        path: "participants",
+        select: "userName firstName lastName userImage isOnline",
       })
       .populate({
-        path: 'unit',
-        select: 'unitName unitLogo',
+        path: "unit",
+        select: "unitName unitLogo",
       })
       .populate({
-        path: 'department',
-        select: 'deptName unit',
-        populate: { path: 'unit', select: 'unitName unitLogo' },
+        path: "department",
+        select: "deptName unit",
+        populate: { path: "unit", select: "unitName unitLogo" },
+      })
+      .populate({
+        path: "church",
+        select: "churchName churchLogo",
       })
       .lean();
 
     if (!chats || chats.length === 0) {
       console.log(`[Backend] No chats found for userId: ${userId}`);
-      return res.status(200).json({ data: [], message: 'No chats found for this user.' });
+      return res
+        .status(200)
+        .json({ data: [], message: "No chats found for this user." });
     }
 
-    const normalizedChatList = chats.map((chat) => {
-      let chatName = 'Unknown Chat';
-      let userImage = [];
-      let privateRecipientId = null;
-      let privateRecipientImage = [];
-      let unitId = chat.unit?._id?.toString();
-      let departmentId = chat.department?._id?.toString();
+    const normalizedChatList = await Promise.all(
+      chats.map(async (chat) => {
+        let chatName = "Unknown Chat";
+        let userImage = [];
+        let privateRecipientId = null;
+        let privateRecipientImage = [];
+        let unitId = chat.unit?._id?.toString();
+        let departmentId = chat.department?._id?.toString();
 
-      // Unread count
-      const userUnreadEntry = chat.unreadCounts?.find(
-        (uc) => uc.user.toString() === userId.toString()
-      );
-      const unreadCount = userUnreadEntry ? userUnreadEntry.count : 0;
+        // Fetch last message
+        const lastMessage = await Message.findOne({ chat: chat._id })
+          .sort({ createdAt: -1 })
+          .lean();
 
-      switch (chat.chatType) {
-        case 'private':
-          const otherParticipant = chat.participants.find(
-            (p) => p._id.toString() !== userId.toString()
-          );
-          if (otherParticipant) {
-            chatName = otherParticipant.userName || `${otherParticipant.firstName || ''} ${otherParticipant.lastName || ''}`.trim() || 'Private Chat';
-            // Extract url from userImage array if it exists
-            userImage = otherParticipant.userImage?.length
-              ? otherParticipant.userImage.map((img) => ({ url: img.url || '', cld_id: img.cld_id || '' }))
-              : [];
-            privateRecipientId = otherParticipant._id.toString();
-            privateRecipientImage = otherParticipant.userImage?.length
-              ? otherParticipant.userImage.map((img) => ({ url: img.url || '', cld_id: img.cld_id || '' }))
-              : [];
-          }
-          break;
-        case 'unit':
-          if (chat.unit) {
-            chatName = chat.unit.unitName || 'Unit Chat';
-            userImage = chat.unit.unitLogo?.length ? chat.unit.unitLogo : [];
-          }
-          break;
-        case 'department':
-          if (chat.department) {
-            chatName = chat.department.deptName || 'Department Chat';
-            userImage = chat.department.unit?.unitLogo?.length ? chat.department.unit.unitLogo : [];
-            unitId = chat.department.unit?._id?.toString();
-          }
-          break;
-        case 'general':
-          chatName = 'General Church Chat';
-          userImage = []; // Add church logo if available
-          break;
-        default:
-          chatName = 'Unknown Chat Type';
-      }
+        // Unread count
+        const userUnreadEntry = chat.unreadCounts?.find(
+          (uc) => uc.user.toString() === userId.toString()
+        );
+        const unreadCount = userUnreadEntry ? userUnreadEntry.count : 0;
 
-      return {
-        id: chat._id.toString(),
-        chatType: chat.chatType,
-        name: chatName,
-        lastMessage: chat.lastMessageText || 'No messages yet...',
-        lastMessageTimestamp: chat.lastMessageAt || chat.createdAt,
-        userImage,
-        privateRecipientId,
-        privateRecipientImage,
-        userName: chat.participants.find((p) => p._id.toString() !== userId.toString())?.userName,
-        firstName: chat.participants.find((p) => p._id.toString() !== userId.toString())?.firstName,
-        lastName: chat.participants.find((p) => p._id.toString() !== userId.toString())?.lastName,
-        isOnline: chat.participants.find((p) => p._id.toString() !== userId.toString())?.isOnline || false,
-        unreadCount,
-        isMuted: chat.isMuted || false,
-        isArchived: chat.isArchived || false,
-        unitId,
-        departmentId,
-        participants: chat.participants.map((p) => ({
-          _id: p._id.toString(),
-          userName: p.userName,
-          firstName: p.firstName,
-          lastName: p.lastName,
-          userImage: p.userImage?.length ? p.userImage.map((img) => ({ url: img.url || '', cld_id: img.cld_id || '' })) : [],
-          isOnline: p.isOnline || false,
-        })),
-      };
-    });
+        switch (chat.chatType) {
+          case "private":
+            const otherParticipant = chat.participants.find(
+              (p) => p._id.toString() !== userId.toString()
+            );
+            if (otherParticipant) {
+              chatName =
+                otherParticipant.userName ||
+                `${otherParticipant.firstName || ""} ${
+                  otherParticipant.lastName || ""
+                }`.trim() ||
+                "Private Chat";
+              userImage = otherParticipant.userImage?.length
+                ? otherParticipant.userImage.map((img) => ({
+                    url: img.url || "",
+                    cld_id: img.cld_id || "",
+                  }))
+                : [];
+              privateRecipientId = otherParticipant._id.toString();
+              privateRecipientImage = otherParticipant.userImage?.length
+                ? otherParticipant.userImage.map((img) => ({
+                    url: img.url || "",
+                    cld_id: img.cld_id || "",
+                  }))
+                : [];
+            }
+            break;
+          case "unit":
+            if (chat.unit) {
+              chatName = chat.unit.unitName || "Unit Chat";
+              userImage = chat.unit.unitLogo?.length
+                ? chat.unit.unitLogo.map((img) => ({
+                    url: img.url || "",
+                    cld_id: img.cld_id || "",
+                  }))
+                : [];
+            }
+            break;
+          case "department":
+            if (chat.department) {
+              chatName = chat.department.deptName || "Department Chat";
+              userImage = chat.department.unit?.unitLogo?.length
+                ? chat.department.unit.unitLogo.map((img) => ({
+                    url: img.url || "",
+                    cld_id: img.cld_id || "",
+                  }))
+                : [];
+              unitId = chat.department.unit?._id?.toString();
+            }
+            break;
+          case "general":
+            if (chat.church) {
+              chatName = chat.church.churchName || "General Church Chat";
+              userImage = chat.church.churchLogo?.length
+                ? chat.church.churchLogo.map((img) => ({
+                    url: img.url || "",
+                    cld_id: img.cld_id || "",
+                  }))
+                : [];
+            }
+            break;
+          default:
+            chatName = "Unknown Chat Type";
+        }
+
+        return {
+          id: chat._id.toString(),
+          chatType: chat.chatType,
+          name: chatName,
+          lastMessage: lastMessage
+            ? lastMessage.messageText || lastMessage.attachments?.[0] || "No messages yet..."
+            : "No messages yet...",
+          lastMessageTimestamp: lastMessage?.createdAt || chat.createdAt,
+          userImage,
+          churchId: chat.church?._id?.toString(),
+          churchName: chat.church?.churchName || "",
+          churchLogo: chat.church?.churchLogo?.length
+            ? chat.church.churchLogo.map((img) => ({
+                url: img.url || "",
+                cld_id: img.cld_id || "",
+              }))
+            : [],
+          privateRecipientId,
+          privateRecipientImage,
+          userName: chat.chatType === "private" ? 
+            chat.participants.find((p) => p._id.toString() !== userId.toString())?.userName : undefined,
+          firstName: chat.chatType === "private" ?
+            chat.participants.find((p) => p._id.toString() !== userId.toString())?.firstName : undefined,
+          lastName: chat.chatType === "private" ?
+            chat.participants.find((p) => p._id.toString() !== userId.toString())?.lastName : undefined,
+          isOnline: chat.chatType === "private" ?
+            chat.participants.find((p) => p._id.toString() !== userId.toString())?.isOnline || false : false,
+          unreadCount,
+          isMuted: chat.isMuted || false,
+          isArchived: chat.isArchived || false,
+          unitId,
+          departmentId,
+          participants: chat.participants
+            .filter(p => mongoose.Types.ObjectId.isValid(p._id))
+            .map((p) => ({
+              _id: p._id.toString(),
+              userName: p.userName,
+              firstName: p.firstName,
+              lastName: p.lastName,
+              userImage: p.userImage?.length
+                ? p.userImage.map((img) => ({
+                    url: img.url || "",
+                    cld_id: img.cld_id || "",
+                  }))
+                : [],
+              isOnline: p.isOnline || false,
+            })),
+        };
+      })
+    );
 
     normalizedChatList.sort(
       (a, b) =>
@@ -393,830 +452,1177 @@ const getCombinedChatlist = async (req, res) => {
         new Date(a.lastMessageTimestamp).getTime()
     );
 
-    console.log(`[Backend] getCombinedChatlist success`, {
+    console.log(`[Backend] getCombinedChatList success`, {
       userId,
       chatCount: normalizedChatList.length,
     });
 
     return res.status(200).json({ data: normalizedChatList });
   } catch (error) {
-    console.error('[Backend] Error fetching combined chat list:', {
+    console.error("[Backend] Error fetching combined chat list:", {
       message: error.message,
       stack: error.stack,
       userId: req.user?._id,
     });
     return res.status(500).json({
-      message: 'Failed to fetch combined chat list',
+      message: "Failed to fetch combined chat list",
       error: error.message,
     });
   }
 };
+
   //Send a message (All chats)
 const sendMessage = async (req, res) => {
-  try {
-    const { chatType, recipientId: targetId } = req.params;
-    const { message = "", reactions = "[]", tempId, replyTo } = req.body;
-    const senderId = req.user._id;
-    const senderDetails = req.user;
-
-    const allowedTypes = ["private", "unit", "department", "general"];
-    if (!chatType || !allowedTypes.includes(chatType)) {
-      return res.status(400).json({ message: "Invalid or missing chat type." });
-    }
-
-    if (chatType !== "general" && !targetId) {
-      return res.status(400).json({ message: `Missing ID parameter for ${chatType} chat.` });
-    }
-
-    let parsedReactions = [];
     try {
-      const parsed = JSON.parse(reactions);
-      if (Array.isArray(parsed) && parsed.every((r) => typeof r === "object" && r.user && typeof r.type === "string")) {
-        parsedReactions = parsed;
-      } else if (reactions !== "[]") {
-        return res.status(400).json({ message: "Invalid reactions format." });
-      }
-    } catch (jsonError) {
-      console.error("[sendMessage] JSON parsing error for reactions:", jsonError);
-      return res.status(400).json({ message: "Invalid reactions format." });
-    }
+        const { chatType, recipientId: targetId } = req.params;
+        const { message = "", reactions = "[]", tempId, replyTo } = req.body;
+        const senderId = req.user._id;
+        const senderDetails = req.user;
 
-    const attachments = req.files?.attachments;
-    const files = attachments ? (Array.isArray(attachments) ? attachments : [attachments]) : [];
-    const uploadedAttachments = [];
-
-    if (!message.trim() && files.length === 0 && !replyTo) {
-      return res.status(400).json({ message: "Message, attachments, or a reply target required." });
-    }
-
-    for (const file of files) {
-      try {
-        const buffer = file.data;
-        let uploadResult;
-        if (file.mimetype.startsWith("image/")) {
-          uploadResult = await uploadToCloudinary(buffer, "chat_uploads");
-        } else if (file.mimetype.startsWith("video/")) {
-          uploadResult = await uploadVideoToCloudinary(buffer, "chat_uploads");
-        } else {
-          uploadResult = await uploadDocumentToCloudinary(buffer, "chat_uploads", file.mimetype);
+        const allowedTypes = ["private", "unit", "department", "general"];
+        if (!chatType || !allowedTypes.includes(chatType)) {
+            return res
+                .status(400)
+                .json({ message: "Invalid or missing chat type." });
         }
 
-        uploadedAttachments.push({
-          url: uploadResult.secure_url || uploadResult.videoUrl || uploadResult.fileUrl,
-          cld_id: uploadResult.public_id || uploadResult.videoCldId || uploadResult.fileCldId,
-          type: file.mimetype || "application/octet-stream",
-          name: file.name ? decodeURIComponent(file.name) : "Unknown",
-          size: file.size ? file.size.toString() : "Unknown",
-        });
-      } catch (error) {
-        console.error(`[sendMessage] Error uploading attachment ${file.name}:`, error);
-        return res.status(500).json({ message: `Failed to upload attachment: ${file.name}` });
-      }
-    }
-
-    let genericChatDocument;
-    let chatRoomId;
-    let actualChatParticipants = [];
-    let unitId; // Store unitId for chat creation
-
-    switch (chatType) {
-      case "private":
-        if (!mongoose.Types.ObjectId.isValid(targetId)) {
-          return res.status(400).json({ message: "Invalid recipient ID for private chat." });
-        }
-        if (senderId.toString() === targetId) {
-          return res.status(400).json({ message: "Cannot send message to yourself." });
+        if (chatType !== "general" && !targetId) {
+            return res
+                .status(400)
+                .json({ message: `Missing ID parameter for ${chatType} chat.` });
         }
 
-        const receiver = await User.findById(targetId);
-        if (!receiver) {
-          return res.status(404).json({ message: "Recipient not found." });
-        }
-
-        const sortedParticipantIds = [String(senderId), String(targetId)].sort();
-        genericChatDocument = await Chat.findOne({
-          chatType: "private",
-          participants: { $all: sortedParticipantIds },
-        });
-
-        if (!genericChatDocument) {
-          console.log(`[sendMessage] Creating new private chat for sender ${senderId} and recipient ${targetId}.`);
-          const privateChatIdentifier = `${sortedParticipantIds[0]}_${sortedParticipantIds[1]}`;
-          const newPrivateChatRef = await new PrivateChat({
-            chatId: privateChatIdentifier,
-            senderId: senderId,
-            receiverId: targetId,
-          }).save();
-
-          genericChatDocument = await new Chat({
-            chatType: "private",
-            participants: [senderId, targetId],
-            privateChatRef: newPrivateChatRef._id,
-            unreadCounts: [
-              { user: senderId, count: 0 },
-              { user: targetId, count: 0 },
-            ],
-          }).save();
-
-          await Promise.all([
-            User.findByIdAndUpdate(senderId, { $addToSet: { privateChats: genericChatDocument._id } }),
-            User.findByIdAndUpdate(targetId, { $addToSet: { privateChats: genericChatDocument._id } }),
-          ]);
-        }
-        chatRoomId = genericChatDocument._id.toString();
-        actualChatParticipants = genericChatDocument.participants.map((id) => id.toString());
-        break;
-
-      case "unit":
-        if (!mongoose.Types.ObjectId.isValid(targetId)) {
-          return res.status(400).json({ message: "Invalid chat ID for unit chat." });
-        }
-        genericChatDocument = await Chat.findById(targetId);
-        if (!genericChatDocument || genericChatDocument.chatType !== "unit") {
-          const unit = await Unit.findOne({ chatId: targetId }).select("members name unitHead _id");
-          if (!unit) {
-            return res.status(404).json({ message: "Unit chat not found and no associated unit found." });
-          }
-          console.log(`[sendMessage] Creating new unit chat for unit ${unit._id}.`);
-          genericChatDocument = await new Chat({
-            chatType: "unit",
-            unit: unit._id,
-            participants: unit.members.concat(unit.unitHead).filter((id, index, self) => id && self.indexOf(id) === index),
-            unreadCounts: unit.members.concat(unit.unitHead).filter((id, index, self) => id && self.indexOf(id) === index).map((member) => ({
-              user: member,
-              count: 0,
-            })),
-            name: `${unit.unitName} Chat`,
-            description: `Chat for ${unit.unitName}`,
-          }).save();
-          unit.chatId = genericChatDocument._id;
-          await unit.save();
-        }
-        if (!genericChatDocument.unit) {
-          return res.status(404).json({ message: "Unit reference missing in chat." });
-        }
-        const unit = await Unit.findById(genericChatDocument.unit).select("members unitName unitHead");
-        if (!unit) {
-          return res.status(404).json({ message: "Unit not found." });
-        }
-        if (!unit.members.some((member) => member.equals(senderId)) && !unit.unitHead.equals(senderId)) {
-          return res.status(403).json({ message: "You are not a member or head of this unit." });
-        }
-        chatRoomId = genericChatDocument._id.toString();
-        actualChatParticipants = unit.members.concat(unit.unitHead).map((m) => m._id.toString()); // Ensure _id is used
-        unitId = unit._id.toString(); // Store unitId for notifications
-        break;
-
-      case "department":
-        if (!mongoose.Types.ObjectId.isValid(targetId)) {
-          console.warn(`[sendMessage] Invalid department ID: ${targetId}`);
-          return res.status(400).json({ message: "Invalid department ID." });
-        }
-        const department = await Department.findById(targetId).select("members deptName unit");
-        if (!department) {
-          console.warn(`[sendMessage] Department not found for departmentId: ${targetId}`);
-          return res.status(404).json({ message: "Department not found." });
-        }
-        if (!department.members.some((member) => member.toString() === senderId.toString())) {
-          console.warn(`[sendMessage] User ${senderId} not a member of department ${targetId}`);
-          return res.status(403).json({ message: "You are not a member of this department." });
-        }
-        const unitDoc = await Unit.findById(department.unit).select("members");
-        if (!unitDoc || !unitDoc.members.some((member) => member.toString() === senderId.toString())) {
-          console.warn(`[sendMessage] User ${senderId} not in unit ${department.unit} for department ${targetId}`);
-          return res.status(403).json({ message: "You are not a member of the unit." });
-        }
-        genericChatDocument = await Chat.findOne({ chatType: "department", department: targetId });
-        if (!genericChatDocument) {
-          console.log(`[sendMessage] Creating new department chat for department ${targetId}`);
-          genericChatDocument = await new Chat({
-            chatType: "department",
-            department: targetId,
-            participants: department.members,
-            unreadCounts: department.members.map((member) => ({ user: member, count: 0 })),
-            name: `${department.deptName} Chat`,
-            description: `Chat for ${department.deptName}`,
-            unit: department.unit,
-          }).save();
-          await Department.findByIdAndUpdate(targetId, { chatId: genericChatDocument._id });
-          await User.updateMany(
-            { _id: { $in: department.members } },
-            { $addToSet: { departmentChats: { id: genericChatDocument._id, name: department.deptName } } }
-          );
-        }
-        chatRoomId = genericChatDocument._id.toString();
-        actualChatParticipants = department.members.map((m) => m._id.toString()); // Ensure _id is used
-        break;
-
-      case "general":
-        genericChatDocument = await Chat.findOne({ chatType: "general" });
-        if (!genericChatDocument) {
-          console.log("[sendMessage] Creating new general chat.");
-          const newGeneralChatRef = await new GeneralChat({ chatId: "general_chat" }).save();
-          genericChatDocument = await new Chat({
-            chatType: "general",
-            participants: [],
-            generalChatRef: newGeneralChatRef._id,
-            unreadCounts: [],
-            name: "General Church Chat",
-            description: "Chat for all church members",
-          }).save();
-        }
-        chatRoomId = genericChatDocument._id.toString();
-        const allUsers = await User.find({}).select("_id").lean();
-        actualChatParticipants = allUsers.map((u) => u._id.toString());
-        break;
-
-      default:
-        return res.status(400).json({ message: "Unsupported chat type." });
-    }
-
-    if (!genericChatDocument) {
-      return res.status(500).json({ message: "Could not establish or find chat context." });
-    }
-
-    const newMessage = new Message({
-      chat: genericChatDocument._id,
-      sender: senderId,
-      messageText: message.trim() || "",
-      attachments: uploadedAttachments,
-      reactions: parsedReactions,
-      contentType:
-        uploadedAttachments.length > 0
-          ? uploadedAttachments[0].type.startsWith("image")
-            ? "image"
-            : uploadedAttachments[0].type.startsWith("video")
-            ? "video"
-            : "file"
-          : message.trim()
-          ? "text"
-          : "reaction_only",
-      replyTo: replyTo && mongoose.Types.ObjectId.isValid(replyTo) ? replyTo : undefined,
-      readBy: [{ user: senderId, readAt: new Date() }],
-    });
-
-    const savedMessage = await newMessage.save();
-    console.log(`[sendMessage] Message saved: _id=${savedMessage._id}, chatType=${chatType}, chatRoomId=${chatRoomId}`);
-
-    const populatedSavedMessage = await Message.findById(savedMessage._id)
-      .populate("sender", "userName firstName lastName userImage")
-      .populate({
-        path: "replyTo",
-        select: "messageText sender",
-        populate: { path: "sender", select: "userName firstName lastName" },
-      })
-      .lean();
-
-    populatedSavedMessage.messageText = populatedSavedMessage.messageText || "";
-
-    const chatBeforeUpdate = await Chat.findById(genericChatDocument._id).lean();
-    const updatedUnreadCounts = chatBeforeUpdate.unreadCounts.map((uc) => {
-      if (uc.user.toString() !== senderId.toString()) {
-        return { user: uc.user, count: uc.count + 1 };
-      }
-      return uc;
-    });
-
-    await Chat.findByIdAndUpdate(
-      genericChatDocument._id,
-      {
-        lastMessageText:
-          savedMessage.messageText ||
-          (savedMessage.attachments.length > 0
-            ? `Attachment (${savedMessage.attachments[0].name})`
-            : savedMessage.replyTo
-            ? "Replied to a message"
-            : "System message"),
-        lastMessageSender: savedMessage.sender,
-        lastMessageAt: savedMessage.createdAt,
-        unreadCounts: updatedUnreadCounts,
-      },
-      { new: true }
-    );
-
-    const io = req.app.get("io");
-    if (io) {
-      const messageToEmit = {
-        _id: savedMessage._id.toString(),
-        chatId: chatRoomId,
-        senderId: senderId.toString(),
-        sender: {
-          _id: senderId.toString(),
-          userName: senderDetails.userName,
-          firstName: senderDetails.firstName,
-          lastName: senderDetails.lastName,
-          userImage: senderDetails.userImage || [],
-        },
-        messageText: savedMessage.messageText,
-        attachments: savedMessage.attachments,
-        type: savedMessage.contentType || "text",
-        createdAt: savedMessage.createdAt.toISOString(),
-        readBy: savedMessage.readBy.map((entry) => ({
-          user: entry.user.toString(),
-          readAt: entry.readAt.toISOString(),
-        })),
-        tempId: tempId || null,
-        status: "sent",
-        replyTo: populatedSavedMessage.replyTo
-          ? {
-              _id: populatedSavedMessage.replyTo._id.toString(),
-              messageText: populatedSavedMessage.replyTo.messageText,
-              sender: populatedSavedMessage.replyTo.sender
-                ? {
-                    _id: populatedSavedMessage.replyTo.sender._id.toString(),
-                    userName: populatedSavedMessage.replyTo.sender.userName,
-                    firstName: populatedSavedMessage.replyTo.sender.firstName,
-                    lastName: populatedSavedMessage.replyTo.sender.lastName,
-                  }
-                : null,
+        let parsedReactions = [];
+        try {
+            const parsed = JSON.parse(reactions);
+            if (
+                Array.isArray(parsed) &&
+                parsed.every(
+                    (r) => typeof r === "object" && r.user && typeof r.type === "string"
+                )
+            ) {
+                parsedReactions = parsed;
+            } else if (reactions !== "[]") {
+                return res.status(400).json({ message: "Invalid reactions format." });
             }
-          : null,
-      };
+        } catch (jsonError) {
+            console.error(
+                "[sendMessage] JSON parsing error for reactions:",
+                jsonError
+            );
+            return res.status(400).json({ message: "Invalid reactions format." });
+        }
 
-      io.to(chatRoomId).emit("receiveMessage", messageToEmit);
-      console.log(`[sendMessage] Emitted 'receiveMessage' to room ${chatRoomId}`);
+        const attachments = req.files?.attachments;
+        const files = attachments ?
+            Array.isArray(attachments) ?
+            attachments :
+            [attachments] :
+            [];
+        const uploadedAttachments = [];
 
-      const senderSocketIds = io.userSocketMap.get(senderId.toString()) || [];
-      if (senderSocketIds.length > 0) {
-        io.to(senderSocketIds).emit("messageSentConfirmation", {
-          ...messageToEmit,
-          tempId: tempId || null,
+        if (!message.trim() && files.length === 0 && !replyTo) {
+            return res
+                .status(400)
+                .json({
+                    message: "Message, attachments, or a reply target required.",
+                });
+        }
+
+        for (const file of files) {
+            try {
+                const buffer = file.data;
+                let uploadResult;
+                if (file.mimetype.startsWith("image/")) {
+                    uploadResult = await uploadToCloudinary(buffer, "chat_uploads");
+                } else if (file.mimetype.startsWith("video/")) {
+                    uploadResult = await uploadVideoToCloudinary(
+                        buffer,
+                        "chat_uploads"
+                    );
+                } else {
+                    uploadResult = await uploadDocumentToCloudinary(
+                        buffer,
+                        "chat_uploads",
+                        file.mimetype
+                    );
+                }
+
+                uploadedAttachments.push({
+                    url: uploadResult.secure_url ||
+                        uploadResult.videoUrl ||
+                        uploadResult.fileUrl,
+                    cld_id: uploadResult.public_id ||
+                        uploadResult.videoCldId ||
+                        uploadResult.fileCldId,
+                    type: file.mimetype || "application/octet-stream",
+                    name: file.name ? decodeURIComponent(file.name) : "Unknown",
+                    size: file.size ? file.size.toString() : "Unknown",
+                });
+            } catch (error) {
+                console.error(
+                    `[sendMessage] Error uploading attachment ${file.name}:`,
+                    error
+                );
+                return res
+                    .status(500)
+                    .json({ message: `Failed to upload attachment: ${file.name}` });
+            }
+        }
+
+        let genericChatDocument;
+        let chatRoomId;
+        let actualChatParticipants = [];
+        let unitId;
+
+        switch (chatType) {
+            case "private":
+                if (!mongoose.Types.ObjectId.isValid(targetId)) {
+                    return res
+                        .status(400)
+                        .json({ message: "Invalid recipient ID for private chat." });
+                }
+                if (senderId.toString() === targetId) {
+                    return res
+                        .status(400)
+                        .json({ message: "Cannot send message to yourself." });
+                }
+
+                const receiver = await User.findById(targetId);
+                if (!receiver) {
+                    return res.status(404).json({ message: "Recipient not found." });
+                }
+
+                const sortedParticipantIds = [
+                    String(senderId),
+                    String(targetId),
+                ].sort();
+                genericChatDocument = await Chat.findOne({
+                    chatType: "private",
+                    participants: { $all: sortedParticipantIds },
+                });
+
+                if (!genericChatDocument) {
+                    console.log(
+                        `[sendMessage] Creating new private chat for sender ${senderId} and recipient ${targetId}.`
+                    );
+                    const privateChatIdentifier = `${sortedParticipantIds[0]}_${sortedParticipantIds[1]}`;
+                    const newPrivateChatRef = await new PrivateChat({
+                        chatId: privateChatIdentifier,
+                        senderId: senderId,
+                        receiverId: targetId,
+                    }).save();
+
+                    genericChatDocument = await new Chat({
+                        chatType: "private",
+                        participants: [senderId, targetId],
+                        privateChatRef: newPrivateChatRef._id,
+                        unreadCounts: [{
+                            user: senderId,
+                            count: 0
+                        }, {
+                            user: targetId,
+                            count: 0
+                        }, ],
+                    }).save();
+
+                    await Promise.all([
+                        User.findByIdAndUpdate(senderId, {
+                            $addToSet: { privateChats: genericChatDocument._id },
+                        }),
+                        User.findByIdAndUpdate(targetId, {
+                            $addToSet: { privateChats: genericChatDocument._id },
+                        }),
+                    ]);
+                }
+                chatRoomId = genericChatDocument._id.toString();
+                actualChatParticipants = genericChatDocument.participants.map((id) =>
+                    id.toString()
+                );
+                break;
+
+            case "unit":
+                if (!mongoose.Types.ObjectId.isValid(targetId)) {
+                    return res
+                        .status(400)
+                        .json({ message: "Invalid chat ID for unit chat." });
+                }
+                genericChatDocument = await Chat.findById(targetId);
+                if (!genericChatDocument || genericChatDocument.chatType !== "unit") {
+                    const unit = await Unit.findOne({ chatId: targetId }).select(
+                        "members name unitHead _id"
+                    );
+                    if (!unit) {
+                        return res
+                            .status(404)
+                            .json({
+                                message: "Unit chat not found and no associated unit found.",
+                            });
+                    }
+                    console.log(
+                        `[sendMessage] Creating new unit chat for unit ${unit._id}.`
+                    );
+                    genericChatDocument = await new Chat({
+                        chatType: "unit",
+                        unit: unit._id,
+                        participants: unit.members
+                            .concat(unit.unitHead)
+                            .filter((id, index, self) => id && self.indexOf(id) === index),
+                        unreadCounts: unit.members
+                            .concat(unit.unitHead)
+                            .filter((id, index, self) => id && self.indexOf(id) === index)
+                            .map((member) => ({
+                                user: member,
+                                count: 0,
+                            })),
+                        name: `${unit.unitName} Chat`,
+                        description: `Chat for ${unit.unitName}`,
+                    }).save();
+                    unit.chatId = genericChatDocument._id;
+                    await unit.save();
+                }
+                if (!genericChatDocument.unit) {
+                    return res
+                        .status(404)
+                        .json({ message: "Unit reference missing in chat." });
+                }
+                const unit = await Unit.findById(genericChatDocument.unit).select(
+                    "members unitName unitHead"
+                );
+                if (!unit) {
+                    return res.status(404).json({ message: "Unit not found." });
+                }
+                if (
+                    !unit.members.some((member) => member.equals(senderId)) &&
+                    !unit.unitHead.equals(senderId)
+                ) {
+                    return res
+                        .status(403)
+                        .json({ message: "You are not a member or head of this unit." });
+                }
+                chatRoomId = genericChatDocument._id.toString();
+                actualChatParticipants = unit.members
+                    .concat(unit.unitHead)
+                    .map((m) => m._id.toString());
+                unitId = unit._id.toString();
+                break;
+
+            case "department":
+                if (!mongoose.Types.ObjectId.isValid(targetId)) {
+                    console.warn(`[sendMessage] Invalid department ID: ${targetId}`);
+                    return res.status(400).json({ message: "Invalid department ID." });
+                }
+                const department = await Department.findById(targetId).select(
+                    "members deptName unit"
+                );
+                if (!department) {
+                    console.warn(
+                        `[sendMessage] Department not found for departmentId: ${targetId}`
+                    );
+                    return res.status(404).json({ message: "Department not found." });
+                }
+                if (
+                    !department.members.some(
+                        (member) => member.toString() === senderId.toString()
+                    )
+                ) {
+                    console.warn(
+                        `[sendMessage] User ${senderId} not a member of department ${targetId}`
+                    );
+                    return res
+                        .status(403)
+                        .json({ message: "You are not a member of this department." });
+                }
+                const unitDoc = await Unit.findById(department.unit).select(
+                    "members"
+                );
+                if (
+                    !unitDoc ||
+                    !unitDoc.members.some(
+                        (member) => member.toString() === senderId.toString()
+                    )
+                ) {
+                    console.warn(
+                        `[sendMessage] User ${senderId} not in unit ${department.unit} for department ${targetId}`
+                    );
+                    return res
+                        .status(403)
+                        .json({ message: "You are not a member of the unit." });
+                }
+                genericChatDocument = await Chat.findOne({
+                    chatType: "department",
+                    department: targetId,
+                });
+                if (!genericChatDocument) {
+                    console.log(
+                        `[sendMessage] Creating new department chat for department ${targetId}`
+                    );
+                    genericChatDocument = await new Chat({
+                        chatType: "department",
+                        department: targetId,
+                        participants: department.members,
+                        unreadCounts: department.members.map((member) => ({
+                            user: member,
+                            count: 0,
+                        })),
+                        name: `${department.deptName} Chat`,
+                        description: `Chat for ${department.deptName}`,
+                        unit: department.unit,
+                    }).save();
+                    await Department.findByIdAndUpdate(targetId, {
+                        chatId: genericChatDocument._id,
+                    });
+                    await User.updateMany({ _id: { $in: department.members } }, {
+                        $addToSet: {
+                            departmentChats: {
+                                id: genericChatDocument._id,
+                                name: department.deptName,
+                            },
+                        },
+                    });
+                }
+                chatRoomId = genericChatDocument._id.toString();
+                actualChatParticipants = department.members.map((m) =>
+                    m._id.toString()
+                );
+                break;
+
+            case "general":
+                genericChatDocument = await Chat.findOne({ chatType: "general" });
+                if (!genericChatDocument) {
+                    console.log("[sendMessage] Creating new general chat.");
+                    const newGeneralChatRef = await new GeneralChat({
+                        chatId: "general_chat",
+                    }).save();
+                    genericChatDocument = await new Chat({
+                        chatType: "general",
+                        participants: [],
+                        generalChatRef: newGeneralChatRef._id,
+                        unreadCounts: [],
+                        name: "General Church Chat",
+                        description: "Chat for all church members",
+                    }).save();
+                }
+                chatRoomId = genericChatDocument._id.toString();
+                const allUsers = await User.find({}).select("_id").lean();
+                actualChatParticipants = allUsers.map((u) => u._id.toString());
+                break;
+
+            default:
+                return res.status(400).json({ message: "Unsupported chat type." });
+        }
+
+        if (!genericChatDocument) {
+            return res
+                .status(500)
+                .json({ message: "Could not establish or find chat context." });
+        }
+
+        const newMessage = new Message({
+            chat: genericChatDocument._id,
+            sender: senderId,
+            messageText: message.trim() || "",
+            attachments: uploadedAttachments,
+            reactions: parsedReactions,
+            contentType: uploadedAttachments.length > 0 ?
+                uploadedAttachments[0].type.startsWith("image") ?
+                "image" :
+                uploadedAttachments[0].type.startsWith("video") ?
+                "video" :
+                "file" :
+                message.trim() ?
+                "text" :
+                "reaction_only",
+            replyTo: replyTo && mongoose.Types.ObjectId.isValid(replyTo) ?
+                replyTo :
+                undefined,
+            readBy: [{ user: senderId, readAt: new Date() }],
         });
-        console.log(`[sendMessage] Emitted 'messageSentConfirmation' to sender ${senderId} for tempId: ${tempId}`);
-      }
 
-      for (const participantId of actualChatParticipants) {
-        if (participantId === senderId.toString()) continue;
-
-        const participantSocketIds = io.userSocketMap.get(participantId) || [];
-        console.log(`[sendMessage] Checking participant ${participantId}: socketIds=${JSON.stringify(participantSocketIds)}`);
-
-        const isParticipantInRoom = participantSocketIds.length > 0 && participantSocketIds.some((socketId) =>
-          io.sockets.adapter.rooms.get(chatRoomId)?.has(socketId)
+        const savedMessage = await newMessage.save();
+        console.log(
+            `[sendMessage] Message saved: _id=${savedMessage._id}, chatType=${chatType}, chatRoomId=${chatRoomId}`
         );
 
-        if (!isParticipantInRoom) {
-          let chatContext = {};
-          switch (chatType) {
-            case "private":
-              const otherUser = await User.findById(targetId).select("userName firstName lastName userImage");
-              chatContext = {
-                chatId: genericChatDocument._id,
-                model: "PrivateChat",
-                type: "private",
-                name: otherUser.userName || `${otherUser.firstName} ${otherUser.lastName}` || "Private Chat",
-                image: otherUser.userImage && otherUser.userImage.length > 0
-                  ? [{
-                      url: otherUser.userImage[0].url,
-                      cld_id: otherUser.userImage[0].cld_id || "",
-                      type: otherUser.userImage[0].type || "image",
-                      size: otherUser.userImage[0].size || 0,
-                      name: otherUser.userImage[0].name || `profile-${targetId}`
-                    }]
-                  : []
-              };
-              break;
-            case "unit":
-              const unit = await Unit.findById(unitId).select("unitName _id");
-              chatContext = {
-                chatId: genericChatDocument._id,
-                model: "UnitChat",
-                type: "unit",
-                name: unit.unitName || "Unit Chat",
-                image: []
-              };
-              break;
-            case "department":
-              const department = await Department.findById(targetId).select("deptName _id");
-              chatContext = {
-                chatId: genericChatDocument._id,
-                model: "DepartmentChat",
-                type: "department",
-                name: department.deptName || "Department Chat",
-                image: []
-              };
-              break;
-            case "general":
-              chatContext = {
-                chatId: genericChatDocument._id,
-                model: "GeneralChat",
-                type: "general",
-                name: "General Church Chat",
-                image: []
-              };
-              break;
-          }
+        const populatedSavedMessage = await Message.findById(savedMessage._id)
+            .populate("sender", "userName firstName lastName userImage")
+            .populate({
+                path: "replyTo",
+                select: "messageText sender",
+                populate: { path: "sender", select: "userName firstName lastName" },
+            })
+            .lean();
 
-          const notificationMessage = message.trim()
-            ? `${message.substring(0, 50)}${message.length > 50 ? "..." : ""}`
-            : uploadedAttachments.length > 0
-            ? `New attachment (${uploadedAttachments[0].name})`
-            : "New message";
+        populatedSavedMessage.messageText =
+            populatedSavedMessage.messageText || "";
 
-          const notification = new Notification({
-            recipient: participantId,
-            sender: senderId,
-            type: "message",
-            message: notificationMessage,
-            referenceModel: "Message",
-            chat: genericChatDocument._id,
-            chatContext,
-            metadata: { messageId: savedMessage._id }
-          });
-          await notification.save();
-
-          const populatedNotification = await Notification.findById(notification._id)
-            .populate("sender", "firstName lastName userName userImage");
-
-          const formattedNotification = {
-            _id: populatedNotification._id.toString(),
-            type: populatedNotification.type,
-            message: populatedNotification.message,
-            read: populatedNotification.read,
-            title: "New Message",
-            createdAt: populatedNotification.createdAt.toISOString(),
-            sender: {
-              _id: populatedNotification.sender?._id.toString(),
-              userName: populatedNotification.sender.userName || '',
-              firstName: populatedNotification.sender.firstName || '',
-              lastName: populatedNotification.sender.lastName || '',
-              userImage: populatedNotification.sender.userImage?.[0]?.url || ''
-            },
-            referenceId: savedMessage._id.toString(),
-            chat: {
-              _id: populatedNotification.chat.toString(),
-              type: chatContext.type,
-              name: chatContext.name,
-              image: chatContext.image
+        const chatBeforeUpdate = await Chat.findById(
+            genericChatDocument._id
+        ).lean();
+        const updatedUnreadCounts = chatBeforeUpdate.unreadCounts.map((uc) => {
+            if (uc.user.toString() !== senderId.toString()) {
+                return { user: uc.user, count: uc.count + 1 };
             }
-          };
+            return uc;
+        });
 
-          if (participantSocketIds.length > 0) {
-            io.to(participantSocketIds).emit("newNotification", formattedNotification);
-            console.log(`[sendMessage] Sent 'newNotification' to user ${participantId}`);
-          } else {
-            console.log(`[sendMessage] No socket connections for user ${participantId}, notification saved but not emitted`);
-          }
+        await Chat.findByIdAndUpdate(
+            genericChatDocument._id, {
+                lastMessageText: savedMessage.messageText ||
+                    (savedMessage.attachments.length > 0 ?
+                        `Attachment (${savedMessage.attachments[0].name})` :
+                        savedMessage.replyTo ?
+                        "Replied to a message" :
+                        "System message"),
+                lastMessageSender: savedMessage.sender,
+                lastMessageAt: savedMessage.createdAt,
+                unreadCounts: updatedUnreadCounts,
+            }, { new: true }
+        );
+
+        const io = req.app.get("io");
+        if (io) {
+            const messageToEmit = {
+                _id: savedMessage._id.toString(),
+                chatId: chatRoomId,
+                senderId: senderId.toString(),
+                sender: {
+                    _id: senderId.toString(),
+                    userName: senderDetails.userName,
+                    firstName: senderDetails.firstName,
+                    lastName: senderDetails.lastName,
+                    userImage: senderDetails.userImage || [],
+                },
+                messageText: savedMessage.messageText,
+                attachments: savedMessage.attachments,
+                type: savedMessage.contentType || "text",
+                createdAt: savedMessage.createdAt.toISOString(),
+                readBy: savedMessage.readBy.map((entry) => ({
+                    user: entry.user.toString(),
+                    readAt: entry.readAt.toISOString(),
+                })),
+                tempId: tempId || null,
+                status: "sent",
+                replyTo: populatedSavedMessage.replyTo ?
+                    {
+                        _id: populatedSavedMessage.replyTo._id.toString(),
+                        messageText: populatedSavedMessage.replyTo.messageText,
+                        sender: populatedSavedMessage.replyTo.sender ?
+                            {
+                                _id: populatedSavedMessage.replyTo.sender._id.toString(),
+                                userName: populatedSavedMessage.replyTo.sender.userName,
+                                firstName: populatedSavedMessage.replyTo.sender.firstName,
+                                lastName: populatedSavedMessage.replyTo.sender.lastName,
+                            } :
+                            null,
+                    } :
+                    null,
+            };
+
+            // This is the core logic for the chat view. It's already correct.
+            io.to(chatRoomId).emit("receiveMessage", messageToEmit);
+            console.log(
+                `[sendMessage] Emitted 'receiveMessage' to room ${chatRoomId}`
+            );
+
+            const senderSocketIds = io.userSocketMap.get(senderId.toString()) || [];
+            if (senderSocketIds.length > 0) {
+                io.to(senderSocketIds).emit("messageSentConfirmation", {
+                    ...messageToEmit,
+                    tempId: tempId || null,
+                });
+                console.log(
+                    `[sendMessage] Emitted 'messageSentConfirmation' to sender ${senderId} for tempId: ${tempId}`
+                );
+            }
+
+            // --- REFACTORED NOTIFICATION LOGIC ---
+            // Now, we iterate through all participants and send a notification to each one
+            // unconditionally, regardless of their current active room.
+            for (const participantId of actualChatParticipants) {
+                if (participantId === senderId.toString()) {
+                    // Skip the sender, as they don't need a notification.
+                    continue;
+                }
+
+                const participantSocketIds = io.userSocketMap.get(participantId) || [];
+                if (participantSocketIds.length > 0) {
+                    let chatContext = {};
+                    switch (chatType) {
+                        case "private":
+                            const otherUser = await User.findById(targetId).select(
+                                "userName firstName lastName userImage"
+                            );
+                            chatContext = {
+                                chatId: genericChatDocument._id,
+                                model: "PrivateChat",
+                                type: "private",
+                                name: otherUser.userName ||
+                                    `${otherUser.firstName} ${otherUser.lastName}` ||
+                                    "Private Chat",
+                                image: otherUser.userImage && otherUser.userImage.length > 0 ?
+                                    [{
+                                        url: otherUser.userImage[0].url,
+                                        cld_id: otherUser.userImage[0].cld_id || "",
+                                        type: otherUser.userImage[0].type || "image",
+                                        size: otherUser.userImage[0].size || 0,
+                                        name: otherUser.userImage[0].name ||
+                                            `profile-${targetId}`,
+                                    }, ] : [],
+                            };
+                            break;
+                        case "unit":
+                            const unit = await Unit.findById(unitId).select("unitName _id");
+                            chatContext = {
+                                chatId: genericChatDocument._id,
+                                model: "UnitChat",
+                                type: "unit",
+                                name: unit.unitName || "Unit Chat",
+                                image: [],
+                            };
+                            break;
+                        case "department":
+                            const department = await Department.findById(targetId).select(
+                                "deptName _id"
+                            );
+                            chatContext = {
+                                chatId: genericChatDocument._id,
+                                model: "DepartmentChat",
+                                type: "department",
+                                name: department.deptName || "Department Chat",
+                                image: [],
+                            };
+                            break;
+                        case "general":
+                            chatContext = {
+                                chatId: genericChatDocument._id,
+                                model: "GeneralChat",
+                                type: "general",
+                                name: "General Church Chat",
+                                image: [],
+                            };
+                            break;
+                    }
+
+                    const notificationMessage = message.trim() ?
+                        `${message.substring(0, 50)}${message.length > 50 ? "..." : ""}` :
+                        uploadedAttachments.length > 0 ?
+                        `New attachment (${uploadedAttachments[0].name})` :
+                        "New message";
+
+                    const notification = new Notification({
+                        recipient: participantId,
+                        sender: senderId,
+                        type: "message",
+                        message: notificationMessage,
+                        referenceModel: "Message",
+                        chat: genericChatDocument._id,
+                        chatContext,
+                        metadata: { messageId: savedMessage._id },
+                    });
+                    await notification.save();
+
+                    const populatedNotification = await Notification.findById(
+                        notification._id
+                    ).populate("sender", "firstName lastName userName userImage");
+
+                    const formattedNotification = {
+                        _id: populatedNotification._id.toString(),
+                        type: populatedNotification.type,
+                        message: populatedNotification.message,
+                        read: populatedNotification.read,
+                        title: "New Message",
+                        createdAt: populatedNotification.createdAt.toISOString(),
+                        sender: {
+                            _id: populatedNotification.sender?._id.toString(),
+                            userName: populatedNotification.sender.userName || "",
+                            firstName: populatedNotification.sender.firstName || "",
+                            lastName: populatedNotification.sender.lastName || "",
+                            userImage: populatedNotification.sender.userImage?.[0]?.url || "",
+                        },
+                        referenceId: savedMessage._id.toString(),
+                        chat: {
+                            _id: populatedNotification.chat.toString(),
+                            type: chatContext.type,
+                            name: chatContext.name,
+                            image: chatContext.image,
+                        },
+                    };
+                    
+                    io.to(participantSocketIds).emit(
+                        "newNotification",
+                        formattedNotification
+                    );
+                    console.log(
+                        `[sendMessage] Sent 'newNotification' to user ${participantId}`
+                    );
+                } else {
+                    console.log(
+                        `[sendMessage] No socket connections for user ${participantId}, notification saved but not emitted`
+                    );
+                }
+            }
+            // --- END REFACTORED NOTIFICATION LOGIC ---
+        } else {
+            console.warn(
+                "[sendMessage] Socket.IO not available for emitting messages or notifications."
+            );
+        }
+
+        res.status(201).json({
+            success: true,
+            message: "Message sent successfully",
+            data: populatedSavedMessage,
+            tempId: tempId || null,
+        });
+    } catch (error) {
+        console.error("[sendMessage] Error sending message:", error);
+        return res.status(500).json({
+            success: false,
+            message: "Internal server error.",
+            error: error.message,
+        });
+    }
+};
+
+
+  const createUnitChat = async (req, res) => {
+    try {
+      const unitId = req.body.unitId || req.body._id;
+      const currentUserId = req.user._id;
+
+      console.log(`[Backend] createUnitChat called for unitId: ${unitId}`, {
+        userId: currentUserId,
+        requestBody: req.body,
+      });
+
+      if (!unitId) {
+        console.log(`[Backend] Missing unitId`, { requestBody: req.body });
+        return res
+          .status(400)
+          .json({ success: false, message: "Unit ID is required." });
+      }
+
+      const isValidId = mongoose.Types.ObjectId.isValid(unitId);
+      console.log(`[Backend] ObjectId validation for unitId: ${unitId}`, {
+        isValid: isValidId,
+      });
+      if (!isValidId) {
+        console.log(`[Backend] Invalid unitId format`, {
+          unitId,
+          requestBody: req.body,
+        });
+        return res
+          .status(400)
+          .json({ success: false, message: "Invalid unit ID format." });
+      }
+
+      const unit = await Unit.findById(unitId);
+      if (!unit) {
+        console.log(`[Backend] Unit not found`, { unitId });
+        return res
+          .status(404)
+          .json({ success: false, message: "Unit not found." });
+      }
+
+      if (
+        !unit.members.some((memberId) => memberId.equals(currentUserId)) &&
+        !unit.unitHead.equals(currentUserId)
+      ) {
+        console.log(`[Backend] User not authorized to create chat for unit`, {
+          unitId,
+          userId: currentUserId,
+        });
+        return res
+          .status(403)
+          .json({
+            success: false,
+            message: "You must be a unit member or head to create a chat.",
+          });
+      }
+
+      if (unit.chatId) {
+        const existingChat = await Chat.findOne({
+          _id: unit.chatId,
+          chatType: "unit",
+          unit: unitId,
+        });
+        if (existingChat) {
+          console.log(`[Backend] Unit chat already exists`, {
+            unitId,
+            chatId: unit.chatId,
+          });
+          return res.status(200).json({
+            success: true,
+            chatId: unit.chatId,
+            message: "Unit chat already exists.",
+          });
         }
       }
-    } else {
-      console.warn("[sendMessage] Socket.IO not available for emitting messages or notifications.");
-    }
 
-    res.status(201).json({
-      success: true,
-      message: "Message sent successfully",
-      data: populatedSavedMessage,
-      tempId: tempId || null,
-    });
-  } catch (error) {
-    console.error("[sendMessage] Error sending message:", error);
-    return res.status(500).json({
-      success: false,
-      message: "Internal server error.",
-      error: error.message,
-    });
-  }
-};
-
-
-const createUnitChat = async (req, res) => {
-  try {
-    const unitId = req.body.unitId || req.body._id;
-    const currentUserId = req.user._id;
-
-    console.log(`[Backend] createUnitChat called for unitId: ${unitId}`, {
-      userId: currentUserId,
-      requestBody: req.body,
-    });
-
-    if (!unitId) {
-      console.log(`[Backend] Missing unitId`, { requestBody: req.body });
-      return res.status(400).json({ success: false, message: "Unit ID is required." });
-    }
-
-    const isValidId = mongoose.Types.ObjectId.isValid(unitId);
-    console.log(`[Backend] ObjectId validation for unitId: ${unitId}`, { isValid: isValidId });
-    if (!isValidId) {
-      console.log(`[Backend] Invalid unitId format`, { unitId, requestBody: req.body });
-      return res.status(400).json({ success: false, message: "Invalid unit ID format." });
-    }
-
-    const unit = await Unit.findById(unitId);
-    if (!unit) {
-      console.log(`[Backend] Unit not found`, { unitId });
-      return res.status(404).json({ success: false, message: "Unit not found." });
-    }
-
-    if (
-      !unit.members.some((memberId) => memberId.equals(currentUserId)) &&
-      !unit.unitHead.equals(currentUserId)
-    ) {
-      console.log(`[Backend] User not authorized to create chat for unit`, {
-        unitId,
-        userId: currentUserId,
+      const chat = await Chat.create({
+        chatType: "unit",
+        unit: unitId,
+        participants: [currentUserId, ...unit.members, unit.unitHead].filter(
+          (id, index, self) => id && self.indexOf(id) === index
+        ),
+        unreadCounts: unit.members
+          .concat(unit.unitHead)
+          .filter((id, index, self) => id && self.indexOf(id) === index)
+          .map((memberId) => ({
+            user: memberId,
+            count: 0,
+          })),
+        name: unit.unitName || `Unit Chat ${unitId}`,
+        description: unit.description || "",
       });
-      return res.status(403).json({ success: false, message: "You must be a unit member or head to create a chat." });
+
+      unit.chatId = chat._id;
+      await unit.save();
+
+      console.log(`[Backend] Unit chat created successfully`, {
+        unitId,
+        chatId: chat._id,
+      });
+
+      return res.status(201).json({
+        success: true,
+        chatId: chat._id,
+        message: "Unit chat created successfully.",
+      });
+    } catch (error) {
+      console.error("[Backend] Error creating unit chat:", {
+        message: error.message,
+        stack: error.stack,
+        requestBody: req.body,
+      });
+      return res.status(500).json({
+        success: false,
+        message: "Internal server error creating unit chat.",
+        error: error.message,
+      });
+    }
+  };
+
+  const getUnitChat = async (req, res) => {
+    try {
+      const unitId = req.params.unitId;
+      const currentUserId = req.user._id;
+
+      console.log(`[Backend] getUnitChat called for unitId: ${unitId}`, {
+        userId: currentUserId,
+        params: req.params,
+      });
+
+      if (!mongoose.Types.ObjectId.isValid(unitId)) {
+        console.log(`[Backend] Invalid unitId format`, { unitId });
+        return res
+          .status(400)
+          .json({ success: false, message: "Invalid unit ID format." });
+      }
+
+      const chat = await Chat.findOne({ unit: unitId, chatType: "unit" });
+      if (!chat) {
+        console.log(`[Backend] No chat found for unit`, { unitId });
+        return res
+          .status(404)
+          .json({ success: false, message: "No chat found for this unit." });
+      }
+
+      if (!chat.participants.some((id) => id.equals(currentUserId))) {
+        console.log(`[Backend] User not authorized to access chat`, {
+          unitId,
+          userId: currentUserId,
+        });
+        return res
+          .status(403)
+          .json({
+            success: false,
+            message: "User is not a participant in this chat.",
+          });
+      }
+
+      console.log(`[Backend] getUnitChat success`, {
+        unitId,
+        chatId: chat._id,
+      });
+      return res.status(200).json({
+        success: true,
+        chat: {
+          _id: chat._id,
+          chatType: chat.chatType,
+          unit: chat.unit,
+          participants: chat.participants,
+          name: chat.name,
+          description: chat.description,
+          unreadCounts: chat.unreadCounts,
+        },
+      });
+    } catch (error) {
+      console.error(`[Backend] Error in getUnitChat:`, {
+        message: error.message,
+        stack: error.stack,
+        unitId: req.params.unitId,
+      });
+      return res.status(500).json({
+        success: false,
+        message: "Internal server error retrieving unit chat.",
+        error: error.message,
+      });
+    }
+  };
+
+  const createDepartmentChat = async (req, res) => {
+    const { departmentId } = req.body;
+    const user = req.user;
+
+    console.log("chatController: createDepartmentChat request", {
+      userId: user?._id.toString(),
+      departmentId,
+    });
+
+    if (!departmentId) {
+      console.log("chatController: Missing department ID", { departmentId });
+      return res
+        .status(400)
+        .json({ success: false, message: "Department ID is required" });
     }
 
-    if (unit.chatId) {
-      const existingChat = await Chat.findOne({ _id: unit.chatId, chatType: "unit", unit: unitId });
-      if (existingChat) {
-        console.log(`[Backend] Unit chat already exists`, {
-          unitId,
-          chatId: unit.chatId,
-        });
-        return res.status(200).json({
-          success: true,
-          chatId: unit.chatId,
-          message: "Unit chat already exists.",
+    if (!mongoose.Types.ObjectId.isValid(departmentId)) {
+      console.log("chatController: Invalid department ID", { departmentId });
+      return res
+        .status(400)
+        .json({ success: false, message: "Invalid department ID" });
+    }
+
+    const session = await mongoose.startSession();
+    session.startTransaction();
+
+    try {
+      const department = await Department.findOne({
+        _id: departmentId,
+        members: user._id,
+      })
+        .populate("unit") // Populate the unit to get unitLogo
+        .session(session);
+
+      if (!department) {
+        console.log(
+          "chatController: Department not found or user not a member",
+          {
+            departmentId,
+            userId: user._id.toString(),
+          }
+        );
+        await session.abortTransaction();
+        return res.status(404).json({
+          success: false,
+          message: "Department not found or user not a member",
         });
       }
+
+      const existingChat = await Chat.findOne({
+        chatType: "department",
+        department: departmentId,
+      }).session(session);
+
+      if (existingChat) {
+        console.log("chatController: Chat already exists for department", {
+          departmentId,
+          chatId: existingChat._id.toString(),
+        });
+        await Department.updateOne(
+          { _id: departmentId },
+          { $set: { chatId: existingChat._id } },
+          { session }
+        );
+        await session.commitTransaction();
+        return res.status(200).json({
+          success: true,
+          chatId: existingChat._id.toString(),
+          message: "Chat already exists",
+        });
+      }
+
+      const newChat = new Chat({
+        chatType: "department",
+        participants: [user._id, ...department.members], // Include all members
+        department: departmentId,
+        unit: department.unit?._id, // Set unit from department
+        image: department.deptLogo?.[0]?.url || "", // Set image from unitLogo if available
+        name: `${department.deptName} Chat`,
+        description: `Chat room for ${department.deptName}`,
+        createdAt: new Date(),
+        unreadCounts: department.members
+          .concat(user._id)
+          .filter((id, index, self) => id && self.indexOf(id) === index)
+          .map((memberId) => ({ user: memberId, count: 0 })),
+      });
+      await newChat.save({ session });
+
+      await Department.updateOne(
+        { _id: departmentId },
+        { $set: { chatId: newChat._id } },
+        { session }
+      );
+
+      await session.commitTransaction();
+
+      console.log("chatController: Department chat created", {
+        departmentId,
+        chatId: newChat._id.toString(),
+      });
+
+      return res.status(201).json({
+        success: true,
+        chatId: newChat._id.toString(),
+        message: "Department chat created successfully",
+      });
+    } catch (error) {
+      await session.abortTransaction();
+      console.error("chatController: Error creating department chat", {
+        message: error.message,
+        stack: error.stack,
+      });
+      return res.status(500).json({
+        success: false,
+        message: "Failed to create department chat",
+        error: error.message,
+      });
+    } finally {
+      session.endSession();
+    }
+  };
+  
+
+  // Get department chat
+// Updated getDepartmentChat controller
+const getDepartmentChat = async (req, res) => {
+  try {
+    const { departmentId } = req.params;
+    const currentUserId = req.user._id;
+
+    if (!mongoose.Types.ObjectId.isValid(departmentId)) {
+      console.log(`[Backend] Invalid departmentId format`, { departmentId });
+      return res.status(400).json({
+        message: "Invalid department ID format (must be a valid ObjectId).",
+      });
     }
 
-    const chat = await Chat.create({
-      chatType: "unit",
-      unit: unitId,
-      participants: [currentUserId, ...unit.members, unit.unitHead].filter(
-        (id, index, self) => id && self.indexOf(id) === index
-      ),
-      unreadCounts: unit.members
-        .concat(unit.unitHead)
-        .filter((id, index, self) => id && self.indexOf(id) === index)
-        .map((memberId) => ({
-          user: memberId,
-          count: 0,
-        })),
-      name: unit.unitName || `Unit Chat ${unitId}`,
-      description: unit.description || "",
+    // Check if the user is a member of the department
+    const department = await Department.findOne({
+      _id: departmentId,
+      members: currentUserId
+    });
+    if (!department) {
+      console.log(`[Backend] Department not found or user not a member`, { departmentId, userId: currentUserId });
+      return res.status(404).json({ message: "Department not found or user not a member." });
+    }
+
+    // Find the chat and populate the department details
+    const departmentChat = await Chat.findOne({
+      department: departmentId,
+      chatType: "department",
+    })
+    .populate({
+      path: 'department',
+      select: 'deptName deptLogo unit' // Select the fields you need from the department
+    })
+    .populate({
+      path: 'unit',
+      select: 'unitName unitLogo church'
+    })
+    .populate({
+      path: 'participants',
+      select: 'firstName lastName userName userImage'
     });
 
-    unit.chatId = chat._id;
-    await unit.save();
+    if (!departmentChat) {
+      console.log(`[Backend] Department chat not found`, { departmentId });
+      // If the chat doesn't exist, we can return a 404, but a more user-friendly flow would be to create it on the client side.
+      return res.status(404).json({ message: "Department chat not found." });
+    }
 
-    console.log(`[Backend] Unit chat created successfully`, {
-      unitId,
-      chatId: chat._id,
+    console.log(`[Backend] Department chat details`, {
+      departmentId,
+      chatId: departmentChat._id.toString(),
+      participants: departmentChat.participants.map((p) => p._id.toString()),
     });
 
-    return res.status(201).json({
+    // Return the enriched chat document
+    return res.status(200).json({
       success: true,
-      chatId: chat._id,
-      message: "Unit chat created successfully.",
+      chat: departmentChat,
+      message: "Department chat fetched successfully.",
     });
   } catch (error) {
-    console.error("[Backend] Error creating unit chat:", {
+    console.error("chatController: Error fetching department chat", {
       message: error.message,
       stack: error.stack,
-      requestBody: req.body,
     });
     return res.status(500).json({
       success: false,
-      message: "Internal server error creating unit chat.",
+      message: "Failed to fetch department chat",
       error: error.message,
     });
   }
 };
 
-const getUnitChat = async (req, res) => {
-     try {
-       const unitId = req.params.unitId;
-       const currentUserId = req.user._id;
-
-       console.log(`[Backend] getUnitChat called for unitId: ${unitId}`, {
-         userId: currentUserId,
-         params: req.params,
-       });
-
-       if (!mongoose.Types.ObjectId.isValid(unitId)) {
-         console.log(`[Backend] Invalid unitId format`, { unitId });
-         return res.status(400).json({ success: false, message: "Invalid unit ID format." });
-       }
-
-       const chat = await Chat.findOne({ unit: unitId, chatType: 'unit' });
-       if (!chat) {
-         console.log(`[Backend] No chat found for unit`, { unitId });
-         return res.status(404).json({ success: false, message: "No chat found for this unit." });
-       }
-
-       if (!chat.participants.some((id) => id.equals(currentUserId))) {
-         console.log(`[Backend] User not authorized to access chat`, { unitId, userId: currentUserId });
-         return res.status(403).json({ success: false, message: "User is not a participant in this chat." });
-       }
-
-       console.log(`[Backend] getUnitChat success`, { unitId, chatId: chat._id });
-       return res.status(200).json({
-         success: true,
-         chat: {
-           _id: chat._id,
-           chatType: chat.chatType,
-           unit: chat.unit,
-           participants: chat.participants,
-           name: chat.name,
-           description: chat.description,
-           unreadCounts: chat.unreadCounts,
-         },
-       });
-     } catch (error) {
-       console.error(`[Backend] Error in getUnitChat:`, {
-         message: error.message,
-         stack: error.stack,
-         unitId: req.params.unitId,
-       });
-       return res.status(500).json({
-         success: false,
-         message: "Internal server error retrieving unit chat.",
-         error: error.message,
-       });
-     }
-   };
-
- const createDepartmentChat = async (req, res) => {
-  const { departmentId } = req.body;
+  // Create Gerneral Chat
+const getOrCreateGeneralChat = async (req, res) => {
+  const { churchId } = req.body; // ✅ POST always, no more GET/POST split
   const user = req.user;
 
-  console.log("chatController: createDepartmentChat request", {
-    userId: user?._id.toString(),
-    departmentId,
+  console.log("[Backend] getOrCreateGeneralChat request", {
+    userId: user?._id?.toString(),
+    churchId,
   });
 
-  if (!departmentId) {
-    console.log("chatController: Missing department ID", { departmentId });
-    return res
-      .status(400)
-      .json({ success: false, message: "Department ID is required" });
-  }
-
-  if (!mongoose.Types.ObjectId.isValid(departmentId)) {
-    console.log("chatController: Invalid department ID", { departmentId });
-    return res
-      .status(400)
-      .json({ success: false, message: "Invalid department ID" });
+  if (!churchId || !mongoose.Types.ObjectId.isValid(churchId)) {
+    return res.status(400).json({ success: false, message: "Valid churchId is required" });
   }
 
   const session = await mongoose.startSession();
   session.startTransaction();
 
   try {
-    const department = await Department.findOne({
-      _id: departmentId,
-      members: user._id,
-    })
-      .populate("unit") // Populate the unit to get unitLogo
+    const churchObjId = new mongoose.Types.ObjectId(churchId);
+    const userId = new mongoose.Types.ObjectId(user._id);
+
+    // --- 1. Fetch church + units
+    const church = await Church.findById(churchObjId)
+      .populate("churchMembers", "userName firstName lastName userImage")
+      .populate("units", "members")
       .session(session);
 
-    if (!department) {
-      console.log(
-        "chatController: Department not found or user not a member",
-        {
-          departmentId,
-          userId: user._id.toString(),
-        }
-      );
+    if (!church) {
       await session.abortTransaction();
-      return res
-        .status(404)
-        .json({
-          success: false,
-          message: "Department not found or user not a member",
-        });
+      return res.status(404).json({ success: false, message: "Church not found" });
     }
 
-    const existingChat = await Chat.findOne({
-      chatType: "department",
-      department: departmentId,
-    }).session(session);
+    // --- 2. Validate membership
+    const isChurchMember = church.churchMembers.some(
+      (m) => m._id && m._id.toString() === userId.toString()
+    );
+    const isUnitMember = church.units.some((u) =>
+      u.members.some((mid) => mid.toString() === userId.toString())
+    );
 
-    if (existingChat) {
-      console.log("chatController: Chat already exists for department", {
-        departmentId,
-        chatId: existingChat._id.toString(),
-      });
-      await Department.updateOne(
-        { _id: departmentId },
-        { $set: { chatId: existingChat._id } },
+    if (!isChurchMember && !isUnitMember) {
+      await session.abortTransaction();
+      return res.status(403).json({ success: false, message: "User not a member of church or its units" });
+    }
+
+    // --- 3. Look for existing general chat
+    let chat = await Chat.findOne({
+      chatType: "general",
+      church: churchObjId,
+    })
+      .populate("participants", "userName firstName lastName userImage")
+      .populate("church", "churchName churchLogo")
+      .session(session);
+
+    if (chat) {
+      // Ensure user is in participants & unreadCounts
+      if (!chat.participants.some((p) => p._id.toString() === userId.toString())) {
+        await Chat.updateOne(
+          { _id: chat._id },
+          { $addToSet: { participants: userId } },
+          { session }
+        );
+        await Chat.updateOne(
+          { _id: chat._id },
+          { $addToSet: { unreadCounts: { user: userId, count: 0 } } },
+          { session }
+        );
+      }
+
+      await User.updateOne(
+        { _id: userId },
+        { $addToSet: { generalChatIds: chat._id } },
         { session }
       );
+
       await session.commitTransaction();
+
       return res.status(200).json({
         success: true,
-        chatId: existingChat._id.toString(),
-        message: "Chat already exists",
+        chatId: chat._id.toString(),
+        participants: chat.participants.map((p) => p._id.toString()),
+        message: "General chat already exists",
+        churchName: church.churchName,
+        churchLogo: church.churchLogo?.[0]?.url || null,
       });
     }
 
+    // --- 4. Otherwise, create new general chat
+    const uniqueMemberIds = new Set();
+    church.churchMembers.forEach((m) => m._id && uniqueMemberIds.add(m._id.toString()));
+    church.units.forEach((u) => u.members.forEach((mid) => uniqueMemberIds.add(mid.toString())));
+    uniqueMemberIds.add(userId.toString());
+
+    const participants = Array.from(uniqueMemberIds).map((id) => new mongoose.Types.ObjectId(id));
+    const unreadCounts = participants.map((pid) => ({ user: pid, count: 0 }));
+
     const newChat = new Chat({
-      chatType: "department",
-      participants: [user._id, ...department.members], // Include all members
-      department: departmentId,
-      unit: department.unit?._id, // Set unit from department
-      image: department.deptLogo?.[0]?.url || "", // Set image from unitLogo if available
-      name: `${department.deptName} Chat`,
-      description: `Chat room for ${department.deptName}`,
-      createdAt: new Date(),
-      unreadCounts: department.members
-        .concat(user._id)
-        .filter((id, index, self) => id && self.indexOf(id) === index)
-        .map((memberId) => ({ user: memberId, count: 0 })),
+      chatType: "general",
+      participants,
+      church: churchObjId,
+      name: `${church.churchName || "General"} Chat`,
+      description: `Chat for all members of ${church.churchName || "the church"}`,
+      unreadCounts,
     });
+
     await newChat.save({ session });
 
-    await Department.updateOne(
-      { _id: departmentId },
-      { $set: { chatId: newChat._id } },
+    await Church.updateOne(
+      { _id: churchObjId },
+      { $set: { generalChatId: newChat._id } },
+      { session }
+    );
+
+    await User.updateMany(
+      { _id: { $in: participants } },
+      { $addToSet: { generalChatIds: newChat._id } },
       { session }
     );
 
     await session.commitTransaction();
 
-    console.log("chatController: Department chat created", {
-      departmentId,
-      chatId: newChat._id.toString(),
-    });
-
     return res.status(201).json({
       success: true,
       chatId: newChat._id.toString(),
-      message: "Department chat created successfully",
+      participants: participants.map((p) => p.toString()),
+      message: "General chat created successfully",
+      churchName: church.churchName,
+      churchLogo: church.churchLogo?.[0]?.url || null,
     });
   } catch (error) {
     await session.abortTransaction();
-    console.error("chatController: Error creating department chat", {
-      message: error.message,
-      stack: error.stack,
-    });
-    return res.status(500).json({
-      success: false,
-      message: "Failed to create department chat",
-      error: error.message,
-    });
+    console.error("[Backend] Error in getOrCreateGeneralChat", error);
+    return res.status(500).json({ success: false, message: "Internal server error", error: error.message });
   } finally {
     session.endSession();
   }
 };
 
-  // Get department chat
-  const getDepartmentChat = async (req, res) => {
-    try {
-      const { departmentId } = req.params;
-      const currentUserId = req.user._id;
-
-      if (!mongoose.Types.ObjectId.isValid(departmentId)) {
-        console.log(`[Backend] Invalid departmentId format`, { departmentId });
-        return res
-          .status(400)
-          .json({
-            message: "Invalid department ID format (must be a valid ObjectId).",
-          });
-      }
-
-      const departmentChat = await Chat.findOne({
-        department: departmentId,
-        chatType: "department",
-      });
-      if (!departmentChat) {
-        console.log(`[Backend] Department chat not found`, { departmentId });
-        return res.status(404).json({ message: "Department chat not found." });
-      }
-
-      console.log(`[Backend] Department chat details`, {
-        departmentId,
-        chatId: departmentChat._id.toString(),
-        participants: departmentChat.participants.map((p) => p.toString()),
-      });
-
-      return res.status(200).json({ success: true, chat: departmentChat });
-    } catch (error) {
-      console.error("chatController: Error fetching department chat", {
-        message: error.message,
-        stack: error.stack,
-      });
-      return res.status(500).json({
-        success: false,
-        message: "Failed to fetch department chat",
-        error: error.message,
-      });
-    }
-  };
 
 const getMessages = async (req, res) => {
   try {
     const { chatId } = req.params;
     const currentUserId = req.user._id;
-    const { beforeId, limit: queryLimit } = req.query;
+    const { beforeId, limit: queryLimit, departmentId } = req.query;
 
     console.log(`[Backend] getMessages called for chatId: ${chatId}`);
     console.log(
-      `[Backend] Query params: { beforeId: ${beforeId}, limit: ${queryLimit}, userId: ${currentUserId} }`
+      `[Backend] Query params: { beforeId: ${beforeId}, limit: ${queryLimit}, userId: ${currentUserId}, departmentId: ${departmentId} }`
     );
 
     if (!mongoose.Types.ObjectId.isValid(chatId)) {
       console.log(`[Backend] Invalid chatId format`, { chatId });
-      return res
-        .status(400)
-        .json({
-          message: "Invalid chat ID format (must be a valid ObjectId).",
-        });
+      return res.status(400).json({
+        message: "Invalid chat ID format (must be a valid ObjectId).",
+      });
     }
 
     const MAX_LIMIT = 50;
@@ -1227,177 +1633,280 @@ const getMessages = async (req, res) => {
       return res.status(400).json({ message: "Invalid limit provided." });
     }
 
-    let chat = await Chat.findById(chatId)
-      .populate("department", "deptName deptLogo _id") // Populate department for name and ID
-      .populate("unit", "unitLogo unitName _id") // Populate unit for logo, name, and ID
-      .lean();
+    const session = await mongoose.startSession();
+    session.startTransaction();
 
-    if (!chat) {
-      console.log(`[Backend] Chat not found`, { chatId });
-      return res.status(404).json({ message: "Chat not found." });
-    }
+    try {
+      let chat = await Chat.findById(chatId)
+        .populate("department", "deptName deptLogo _id members")
+        .populate("unit", "unitLogo unitName _id members unitHead")
+        .populate("church", "churchName churchLogo _id")
+        .populate("participants", "userName userImage _id isOnline")
+        .session(session)
+        .lean();
 
-    console.log(`[Backend] Chat details`, {
-      chatId,
-      chatType: chat.chatType,
-      department: chat.department?._id?.toString(),
-      deptLogo: chat.department?.deptLogo?.map((logo) => logo.url),
-      unitName: chat.unit?.unitName || "No Unit",
-      unit: chat.unit?._id?.toString(),
-      participants: chat.participants.map((p) => p.toString()),
-    });
-
-    // Validate membership and repair unit chat if necessary
-    if (chat.chatType === "unit") {
-      if (!chat.unit) {
-        console.log(`[Backend] Unit reference missing in chat`, { chatId });
-        return res.status(404).json({ message: "Unit reference missing in chat." });
+      if (!chat) {
+        console.log(`[Backend] Chat not found`, { chatId });
+        await session.abortTransaction();
+        return res.status(404).json({ message: "Chat not found." });
       }
 
-      const unit = await Unit.findById(chat.unit);
-      if (!unit) {
-        console.log(`[Backend] Unit not found for chat`, { unitId: chat.unit, chatId });
-        return res.status(404).json({ message: "Unit not found for this chat." });
-      }
-
-      if (
-        !unit.members.some((memberId) => memberId.equals(currentUserId)) &&
-        !unit.unitHead.equals(currentUserId)
-      ) {
-        console.log(`[Backend] User not authorized for unit chat`, {
-          unitId: unit._id,
-          userId: currentUserId.toString(),
-          isMember: unit.members.some((memberId) => memberId.equals(currentUserId)),
-          isUnitHead: unit.unitHead.equals(currentUserId),
+      // Validate participants
+      const validParticipants = chat.participants.filter(p => mongoose.Types.ObjectId.isValid(p._id));
+      if (validParticipants.length !== chat.participants.length) {
+        console.warn(`[Backend] Invalid participant IDs detected in chat`, {
+          chatId,
+          invalidParticipants: chat.participants.filter(p => !mongoose.Types.ObjectId.isValid(p._id)),
         });
-        return res
-          .status(403)
-          .json({
-            message: "You must be a unit member or head to view messages in this chat.",
+        chat.participants = validParticipants;
+      }
+
+      // For department chats, ensure user is a member and add to participants if needed
+      if (chat.chatType === "department" && departmentId) {
+        if (!mongoose.Types.ObjectId.isValid(departmentId)) {
+          console.log(`[Backend] Invalid departmentId`, { departmentId });
+          await session.abortTransaction();
+          return res.status(400).json({ message: "Invalid department ID" });
+        }
+
+        const department = await Department.findById(departmentId).session(session);
+        if (!department) {
+          console.log(`[Backend] Department not found`, { departmentId });
+          await session.abortTransaction();
+          return res.status(404).json({ message: "Department not found." });
+        }
+
+        if (!department.members.some((memberId) => memberId.equals(currentUserId))) {
+          console.log(`[Backend] User not authorized for department chat`, {
+            departmentId,
+            userId: currentUserId.toString(),
+            isMember: department.members.some((memberId) => memberId.equals(currentUserId)),
           });
-      }
-    } else if (chat.chatType === "department") {
-      if (!chat.department) {
-        console.log(`[Backend] Department reference missing in chat`, { chatId });
-        return res.status(404).json({ message: "Department reference missing in chat." });
-      }
-      const department = await Department.findById(chat.department);
-      if (!department) {
-        console.log(`[Backend] Department not found`, {
-          departmentId: chat.department,
-        });
-        return res.status(404).json({ message: "Department not found." });
-      }
-      if (!department.members.some((memberId) => memberId.equals(currentUserId))) {
-        console.log(`[Backend] User not authorized for department chat`, {
-          departmentId: chat.department,
-          userId: currentUserId.toString(),
-          isMember: department.members.some((memberId) => memberId.equals(currentUserId)),
-        });
-        return res
-          .status(403)
-          .json({
+          await session.abortTransaction();
+          return res.status(403).json({
             message: "You must be a department member to view messages in this chat.",
           });
-      }
-    } else if (
-      chat.chatType === "private" &&
-      !chat.participants.some((p) => p.equals(currentUserId))
-    ) {
-      console.log(`[Backend] User not authorized for private chat`, {
-        chatId,
-        userId: currentUserId.toString(),
-        participants: chat.participants.map((p) => p.toString()),
-      });
-      return res
-        .status(403)
-        .json({
-          message: "You are not authorized to view messages in this chat.",
+        }
+
+        if (!chat.participants.some((p) => p._id.toString() === currentUserId.toString())) {
+          console.log(`[Backend] Adding user to department chat participants`, {
+            chatId,
+            userId: currentUserId.toString(),
+          });
+          await Chat.updateOne(
+            { _id: chatId },
+            {
+              $addToSet: {
+                participants: currentUserId,
+                unreadCounts: { user: currentUserId, count: 0 },
+              },
+            },
+            { session }
+          );
+
+          await User.updateOne(
+            { _id: currentUserId },
+            {
+              $addToSet: {
+                departmentChats: {
+                  id: chat._id,
+                  deptName: department.deptName,
+                  deptLogo: department.deptLogo || [],
+                },
+              },
+            },
+            { session }
+          );
+
+          chat = await Chat.findById(chatId)
+            .populate("department", "deptName deptLogo _id members")
+            .populate("unit", "unitLogo unitName _id members unitHead")
+            .populate("church", "churchName churchLogo _id")
+            .populate("participants", "userName userImage _id isOnline")
+            .session(session)
+            .lean();
+        }
+      } else if (chat.chatType === "unit") {
+        if (!chat.unit) {
+          console.log(`[Backend] Unit reference missing in chat`, { chatId });
+          await session.abortTransaction();
+          return res.status(404).json({ message: "Unit reference missing in chat." });
+        }
+
+        if (
+          !chat.unit.members.some((memberId) => memberId.equals(currentUserId)) &&
+          !chat.unit.unitHead.equals(currentUserId)
+        ) {
+          console.log(`[Backend] User not authorized for unit chat`, {
+            unitId: chat.unit._id,
+            userId: currentUserId.toString(),
+            isMember: chat.unit.members.some((memberId) => memberId.equals(currentUserId)),
+            isUnitHead: chat.unit.unitHead.equals(currentUserId),
+          });
+          await session.abortTransaction();
+          return res.status(403).json({
+            message: "You must be a unit member or head to view messages in this chat.",
+          });
+        }
+      } else if (chat.chatType === "private") {
+        const isParticipant = chat.participants.some(p => {
+          try {
+            return mongoose.Types.ObjectId.isValid(p._id) && new mongoose.Types.ObjectId(p._id).equals(currentUserId);
+          } catch (err) {
+            console.warn(`[Backend] Invalid participant ID in private chat`, { participant: p, chatId });
+            return false;
+          }
         });
-    }
 
-    // Mark all received messages as read & reset unread count
-    await Promise.all([
-      Message.updateMany(
-        {
-          chat: chatId,
-          sender: { $ne: currentUserId },
-          "readBy.user": { $ne: currentUserId },
-        },
-        { $addToSet: { readBy: { user: currentUserId, readAt: Date.now() } } }
-      ),
-      Chat.findOneAndUpdate(
-        { _id: chatId, "unreadCounts.user": currentUserId },
-        { $set: { "unreadCounts.$.count": 0 } },
-        { new: true }
-      ),
-    ]);
+        if (!isParticipant) {
+          console.log(`[Backend] User not authorized for private chat`, {
+            chatId,
+            userId: currentUserId.toString(),
+            participants: chat.participants.map(p => p._id.toString()),
+          });
+          await session.abortTransaction();
+          return res.status(403).json({
+            message: "You are not authorized to view messages in this chat.",
+          });
+        }
+      }
 
-    // Build message filter
-    let filter = { chat: chatId };
-    if (beforeId && mongoose.Types.ObjectId.isValid(beforeId)) {
-      filter._id = { $lt: new mongoose.Types.ObjectId(beforeId) };
-      console.log(`[Backend] Using _id filter: ${JSON.stringify(filter._id)}`);
-    } else if (beforeId) {
-      console.warn(`[Backend] Invalid beforeId received: ${beforeId}. Skipping _id filter.`);
-    } else {
-      console.log(`[Backend] No beforeId provided. Fetching latest messages.`);
-    }
+      // Mark messages as read and reset unread count
+      await Promise.all([
+        Message.updateMany(
+          {
+            chat: chatId,
+            sender: { $ne: currentUserId },
+            "readBy.user": { $ne: currentUserId },
+          },
+          {
+            $addToSet: {
+              readBy: {
+                user: new mongoose.Types.ObjectId(currentUserId),
+                readAt: new Date(),
+              },
+            },
+          },
+          { session }
+        ),
+        Chat.findOneAndUpdate(
+          {
+            _id: chatId,
+            "unreadCounts.user": new mongoose.Types.ObjectId(currentUserId),
+          },
+          { $set: { "unreadCounts.$.count": 0 } },
+          { new: true, session }
+        ),
+      ]);
 
-    // Fetch messages + 1 extra to determine `hasMore`
-    const fetchedMessages = await Message.find(filter)
-      .sort({ createdAt: -1 })
-      .limit(limit + 1)
-      .populate("sender", "userName firstName lastName userImage")
-      .populate({
-        path: "reactions.user",
-        select: "userName firstName lastName userImage",
-      })
-      .populate({
-        path: "replyTo",
-        select: "messageText sender",
-        populate: { path: "sender", select: "userName userImage" },
-      })
-      .populate({
-        path: "post",
-        populate: {
-          path: "user",
+      // Build message filter
+      let filter = { chat: chatId };
+      if (beforeId && mongoose.Types.ObjectId.isValid(beforeId)) {
+        filter._id = { $lt: new mongoose.Types.ObjectId(beforeId) };
+        console.log(`[Backend] Using _id filter: ${JSON.stringify(filter._id)}`);
+      } else if (beforeId) {
+        console.warn(`[Backend] Invalid beforeId received: ${beforeId}. Skipping _id filter.`);
+      } else {
+        console.log(`[Backend] No beforeId provided. Fetching latest messages.`);
+      }
+
+      // Fetch messages + 1 extra to determine `hasMore`
+      const fetchedMessages = await Message.find(filter)
+        .sort({ createdAt: -1 })
+        .limit(limit + 1)
+        .populate("sender", "userName firstName lastName userImage")
+        .populate({
+          path: "reactions.user",
           select: "userName firstName lastName userImage",
-        },
-      })
-      .lean();
+        })
+        .populate({
+          path: "replyTo",
+          select: "messageText sender",
+          populate: { path: "sender", select: "userName userImage" },
+        })
+        .populate({
+          path: "post",
+          populate: {
+            path: "user",
+            select: "userName firstName lastName userImage",
+          },
+        })
+        .session(session)
+        .lean();
 
-    const hasMore = fetchedMessages.length > limit;
-    const messagesToReturn = fetchedMessages.slice(0, limit).reverse();
+      const hasMore = fetchedMessages.length > limit;
+      const messagesToReturn = fetchedMessages.slice(0, limit).reverse();
 
-    // Construct chatContext
- const chatContext = {
-    chatId: chat._id.toString(),
-    type: chat.chatType,
-    name: chat.name || (chat.department ? chat.department.deptName : "Unnamed Chat"),
-    image: chat.unit?.unitLogo?.map(img => ({ url: img.url || img, type: "image" })) || // Use unitLogo if available
-           (chat.image ? [{ url: chat.image, type: "image" }] : []), // Fallback to chat.image
-    departmentId: chat.department?._id?.toString(),
-    unitId: chat.unit?._id?.toString(),
-    ChurchId: chat.unit?.church || null,
-    participants: chat.participants.map(p => p.toString()),
-    model: chat.chatType === "private" ? "PrivateChat" : chat.chatType === "unit" ? "UnitChat" : chat.chatType === "department" ? "DepartmentChat" : "GeneralChat",
-  };
+      // Construct chatContext
+      const chatContext = {
+        chatId: chat._id.toString(),
+        type: chat.chatType,
+        name:
+          chat.name ||
+          (chat.department
+            ? chat.department.deptName
+            : chat.church
+            ? chat.church.churchName
+            : chat.chatType === "private"
+            ? chat.participants.find(p => p._id.toString() !== currentUserId.toString())?.userName
+            : "Unnamed Chat"),
+        image:
+          chat.unit?.unitLogo?.map((img) => ({
+            url: img.url || img,
+            type: "image",
+          })) ||
+          chat.department?.deptLogo?.map((img) => ({
+            url: img.url || img,
+            type: "image",
+          })) ||
+          chat.church?.churchLogo?.map((img) => ({
+            url: img.url || img,
+            type: "image",
+          })) ||
+          (chat.image ? [{ url: chat.image, type: "image" }] : []),
+        departmentId: chat.department?._id?.toString(),
+        unitId: chat.unit?._id?.toString(),
+        ChurchId: chat.church?._id?.toString() || null,
+        participants: chat.participants.map(p => p._id.toString()),
+        model:
+          chat.chatType === "private"
+            ? "PrivateChat"
+            : chat.chatType === "unit"
+            ? "UnitChat"
+            : chat.chatType === "department"
+            ? "DepartmentChat"
+            : "GeneralChat",
+      };
 
-  console.log(`[Backend] Messages fetched`, {
-    chatId,
-    messageCount: messagesToReturn.length,
-    hasMore,
-    chatContext,
-  });
+      await session.commitTransaction();
 
-  return res.status(200).json({
-    success: true,
-    messages: messagesToReturn,
-    hasMore,
-    chatContext,
-  });
+      console.log(`[Backend] Messages fetched`, {
+        chatId,
+        messageCount: messagesToReturn.length,
+        hasMore,
+        chatContext,
+      });
 
+      return res.status(200).json({
+        success: true,
+        messages: messagesToReturn,
+        hasMore,
+        chatContext,
+      });
+    } catch (error) {
+      await session.abortTransaction();
+      console.error("[Backend] Error retrieving messages:", {
+        message: error.message,
+        stack: error.stack,
+      });
+      return res.status(500).json({
+        success: false,
+        message: "Internal server error retrieving messages.",
+        error: error.message,
+      });
+    } finally {
+      session.endSession();
+    }
   } catch (error) {
     console.error("[Backend] Error retrieving messages:", {
       message: error.message,
@@ -1519,11 +2028,9 @@ const getMessages = async (req, res) => {
       }
 
       if (!currentUserId || !reactionType || typeof reactionType !== "string") {
-        return res
-          .status(400)
-          .json({
-            message: "Authenticated user ID and reaction type are required.",
-          });
+        return res.status(400).json({
+          message: "Authenticated user ID and reaction type are required.",
+        });
       }
 
       // 1. Find the message and check if the user has already reacted with this type
@@ -1811,12 +2318,10 @@ const getMessages = async (req, res) => {
         "departmentChats"
       );
       if (!user.departmentChats || user.departmentChats.length === 0) {
-        return res
-          .status(200)
-          .json({
-            data: [],
-            message: "User not assigned to any department chats",
-          });
+        return res.status(200).json({
+          data: [],
+          message: "User not assigned to any department chats",
+        });
       }
 
       const chats = await Chat.find({
@@ -1847,12 +2352,10 @@ const getMessages = async (req, res) => {
       res.status(200).json({ data: chatList });
     } catch (err) {
       console.error("Error in getDepartmentChatList:", err);
-      res
-        .status(500)
-        .json({
-          message: "Failed to fetch department chats",
-          error: err.message,
-        });
+      res.status(500).json({
+        message: "Failed to fetch department chats",
+        error: err.message,
+      });
     }
   };
 
@@ -2128,7 +2631,8 @@ const getMessages = async (req, res) => {
     createDepartmentChat,
     getDepartmentChat,
     createUnitChat,
-    getUnitChat
+    getUnitChat,
+   getOrCreateGeneralChat,
   };
 };
 

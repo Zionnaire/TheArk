@@ -21,6 +21,7 @@ chatRouter.get("/private/:recipientId/exists", verifyToken, chatIo.checkPrivateC
 chatRouter.get("/unitChat/:unitId", verifyToken, chatIo.getUnitChat);
 chatRouter.get("/unit", verifyToken, chatIo.getUnitMessages);
 chatRouter.get("/department", verifyToken, chatIo.getDepartmentMessages);
+chatRouter.post("/general", verifyToken, chatIo.getOrCreateGeneralChat);
 chatRouter.get("/general", verifyToken, chatIo.getGeneralMessages);
 chatRouter.get("/unit-chats", verifyToken, chatIo.getUnitChatList);
 chatRouter.get("/department-chats", verifyToken, chatIo.getDepartmentChatList);
