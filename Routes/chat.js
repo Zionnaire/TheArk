@@ -27,6 +27,7 @@ chatRouter.get("/unit-chats", verifyToken, chatIo.getUnitChatList);
 chatRouter.get("/department-chats", verifyToken, chatIo.getDepartmentChatList);
 chatRouter.get("/general-chats", verifyToken, chatIo.getGeneralChatList);
 chatRouter.post("/toggleReaction/:messageId", verifyToken, chatIo.toggleReaction);
+chatRouter.post("/announcement", verifyToken, chatIo.sendAnnouncement);
 
 // 👇 Wildcard route goes LAST
 // chatRouter.get("/:chatType/:id?", verifyToken, chatIo.getChatMessages);

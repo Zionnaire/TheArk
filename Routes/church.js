@@ -41,10 +41,10 @@ churchRouter.get("/:id/units/:unitId/members", getAllUnitMembers);
 churchRouter.get("/:id/units/:unitId", getUnitById);
 churchRouter.put("/units/:unitId", verifyToken, updateUnit);
 churchRouter.get("/:id/units", getAllUnits); // All units for a specific church
-churchRouter.get("/:id/members", getAllChurchMembers); // All members for a specific church
+churchRouter.get("/:churchId/members", verifyToken, getAllChurchMembers); // All members for a specific church
 
 // General `:id` routes - PLACE THESE LAST
-churchRouter.get("/:id", getChurchById); // <-- This should be lower now
+churchRouter.get("/:id", verifyToken, getChurchById); 
 
 // Route for getting ALL churches (no params, very general)
 churchRouter.get("/", getAllChurches);

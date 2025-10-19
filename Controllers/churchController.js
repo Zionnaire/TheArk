@@ -165,12 +165,12 @@ const loginChurch = async (req, res) => {
         // 2. Generate the Refresh Token String
         // Assuming jwt.signRefreshToken function in jwt.js creates a token for refresh purposes
         // This function should accept an object with _id, e.g., jwt.signRefreshToken({ _id: church._id })
-        const refreshTokenString = jwt.signRefreshToken({ _id: church._id });
+        const refreshTokenString = jwt.signRefreshToken({ _id: church._id, role: 'churchAdmin' }); // Pass role if needed
 
         // 3. Create or Update the RefreshToken document in the database
         // It's usually better to find and update/replace an existing refresh token for a user/church
         // rather than creating a new one on every login, to manage token revocation better.
-        let refreshTokenDocument = await RefreshToken.findOne({ churchId: church._id });
+        let refreshTokenDocument = await RefreshToken.findOne({ churchId: church._id, role: 'churchAdmin' });
 
         if (refreshTokenDocument) {
             // Update existing token
@@ -182,6 +182,7 @@ const loginChurch = async (req, res) => {
             // Create new token
             refreshTokenDocument = await RefreshToken.create({
                 churchId: church._id,
+                role: 'churchAdmin',
                 token: refreshTokenString,
                 expiresAt: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000), // 7 days
             });
@@ -255,13 +256,29 @@ const getAllChurches = async (req, res) => {
 // Create controller for getting a single church
 const getChurchById = async (req, res) => {
     try {
-        const church = await Church.findById(req.params.id);
+        let churchId = req.params.id;
+
+        // Check for the "me" identifier and use the churchId from the authenticated user
+        if (churchId === 'me' && req.user && req.user.churchId) {
+            churchId = req.user.churchId;
+        }
+
+        // Perform the query with the resolved churchId
+        const church = await Church.findById(churchId).lean(); // Use .lean() for performance
+
         if (!church) {
             return res.status(404).json({ message: 'Church not found' });
         }
+
         res.status(200).json(church);
     } catch (error) {
-        console.error(error);
+        // This catch block will now handle the CastError gracefully
+        console.error("Error in getChurchById:", error);
+        
+        if (error.name === 'CastError') {
+            return res.status(400).json({ message: "Invalid Church ID format" });
+        }
+        
         res.status(500).json({ message: 'Internal server error' });
     }
 }
@@ -546,6 +563,7 @@ const createUnit = async (req, res) => {
     // Create UnitChat
     const unitChatId = uuidv4();
     const unitChat = new Chat({
+      chatType: "unit",
       chatId: unitChatId,
       unit: null,
       members: [unitHeadId],
@@ -942,18 +960,54 @@ const getAllChurchMembers = async (req, res) => {
       return res.status(403).json({ message: "Unauthorized: Church Admin only" });
     }
 
-    const church = await Church.findById(churchId).populate("members._id", "userName firstName lastName email avatar");
+    const church = await Church.findById(churchId).populate({
+      path: "churchMembers._id",
+      model: "User",
+      select: "userName firstName lastName email"
+    });
 
     if (!church) {
       return res.status(404).json({ message: "Church not found" });
     }
 
-    res.status(200).json(church.members);
+    // Filter out any members that could not be populated (i.e., the ones causing the warning)
+    const validMembers = church.churchMembers.filter(member => {
+      if (!member._id) {
+        console.warn(`Warning: Could not populate user for a member in church ${churchId}. This member will be skipped and removed from the database.`);
+        return false; // Skip this member
+      }
+      return true; // Keep this member
+    });
+
+    // Extract the valid member IDs to update the church document
+    const validMemberIds = validMembers.map(member => ({
+      _id: member._id._id
+    }));
+
+    // Update the church document in the database with only the valid members
+    await Church.findByIdAndUpdate(churchId, {
+      $set: { churchMembers: validMemberIds }
+    });
+
+    console.log(`Cleaned up churchMembers for church ${churchId} ${church.churchMembers}. Removed invalid members.`);
+    
+
+    // Map the valid members to the format expected by the frontend
+    const membersWithId = validMembers.map(member => ({
+      _id: member._id._id,
+      name: member._id.userName || `${member._id.firstName} ${member._id.lastName}`,
+      email: member._id.email,
+    }));
+
+    res.status(200).json(membersWithId);
   } catch (error) {
     console.error("Error fetching church members:", error);
     res.status(500).json({ message: "Internal server error" });
   }
 };
+
+
+
 
 
 

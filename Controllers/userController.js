@@ -5,6 +5,8 @@ const bcrypt = require("bcryptjs");
 const { signJwt, signRefreshToken } = require("../Middlewares/jwt");
 const logger = require("../Middlewares/logger");
 const { uploadToCloudinary } = require("../Middlewares/cloudinaryUpload");
+const RefreshToken = require('../Models/refreshToken');
+
 
 
 // Register user
@@ -120,19 +122,19 @@ const login = async (req, res) => {
     let user = await User.findOne({ email })
       .populate({
         path: "unitChats",
-        populate: { path: "lastMessage", select: "messageText sender createdAt" }, 
+        populate: { path: "lastMessage", select: "messageText sender createdAt" },
       })
       .populate({
         path: "departmentChats",
-        populate: { path: "lastMessage", select: "messageText sender createdAt" }, 
+        populate: { path: "lastMessage", select: "messageText sender createdAt" },
       })
       .populate({
         path: "privateChats",
-        populate: { path: "lastMessage", select: "messageText sender createdAt" }, 
+        populate: { path: "lastMessage", select: "messageText sender createdAt" },
       })
       .populate({
         path: "generalChats",
-        populate: { path: "lastMessage", select: "messageText sender createdAt" }, 
+        populate: { path: "lastMessage", select: "messageText sender createdAt" },
       });
 
     if (!user) {
@@ -145,10 +147,28 @@ const login = async (req, res) => {
       return res.status(400).json({ message: "Invalid credentials" });
     }
 
-    // Create JWT tokens using the updated middleware functions
+    // Create JWT tokens
     const token = signJwt({ user, role: user.role, name: user.firstName, churchId: user.churchId, assignedUnits: user.assignedUnits });
-    // Corrected parameter for signRefreshToken from '_id' to 'id'.
-    const refreshToken = signRefreshToken({_id: user._id, role: user.role, churchId: user.churchId });
+    const refreshToken = signRefreshToken({ _id: user._id, role: user.role, churchId: user.churchId });
+
+    // Save or update refresh token in the database
+    let refreshTokenDocument = await RefreshToken.findOne({ userId: user._id });
+    if (refreshTokenDocument) {
+      // Update existing token
+      refreshTokenDocument.token = refreshToken;
+      refreshTokenDocument.expiresAt = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000); // 7 days
+      await refreshTokenDocument.save();
+      console.log(`[login] Updated refresh token for userId: ${user._id}`);
+    } else {
+      // Create new token
+      refreshTokenDocument = await RefreshToken.create({
+        userId: user._id,
+        role: user.role,
+        token: refreshToken,
+        expiresAt: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000), // 7 days
+      });
+      console.log(`[login] Created refresh token for userId: ${user._id}`);
+    }
 
     // Respond with user data and tokens
     res.json({
@@ -164,23 +184,20 @@ const login = async (req, res) => {
         phoneNumber: user.phoneNumber,
         isActive: user.isActive,
         isEmailVerified: user.isEmailVerified,
-        userImage: user.userImage, // Assuming userImage is an array of objects
+        userImage: user.userImage,
         bio: user.bio,
         posts: user.posts,
         socialMedia: user.socialMedia,
         churchId: user.churchId,
-
-        // Map populated chat data
         unitChats: user.unitChats?.map(chat => ({
           _id: chat._id,
           lastMessage: chat.lastMessage ? {
             _id: chat.lastMessage._id,
-            messageText: chat.lastMessage.messageText, 
+            messageText: chat.lastMessage.messageText,
             sender: chat.lastMessage.sender,
             createdAt: chat.lastMessage.createdAt,
           } : null,
         })),
-
         departmentChats: user.departmentChats?.map(chat => ({
           _id: chat._id,
           lastMessage: chat.lastMessage ? {
@@ -190,7 +207,6 @@ const login = async (req, res) => {
             createdAt: chat.lastMessage.createdAt,
           } : null,
         })),
-
         privateChats: user.privateChats?.map(chat => ({
           _id: chat._id,
           lastMessage: chat.lastMessage ? {
@@ -200,13 +216,12 @@ const login = async (req, res) => {
             createdAt: chat.lastMessage.createdAt,
           } : null,
         })),
-
         generalChats: user.generalChats?.map(chat => ({
           _id: chat._id,
           lastMessage: chat.lastMessage ? {
             _id: chat.lastMessage._id,
             messageText: chat.lastMessage.messageText,
-            sender: chat.lastMessage.sender,
+            sender: church.lastMessage.sender,
             createdAt: chat.lastMessage.createdAt,
           } : null,
         })),
@@ -215,7 +230,7 @@ const login = async (req, res) => {
 
   } catch (err) {
     console.error("Login Error:", err.message);
-    logger?.error?.(err.message); // Optional: your custom logger if defined globally/imported
+    logger?.error?.(err.message);
     res.status(500).send("Server error");
   }
 };
@@ -510,7 +525,6 @@ const getAllUserChats = async (req, res) => {
 // User join a church
 const joinChurch = async (req, res) => {
   try {
-    // console.log("User joining (from old token payload): ", req.user); // This will show churchId: null
 
     const { churchId } = req.body; // Church ID from frontend request body
     const userId = req.user._id;   // User ID from the old token's payload
@@ -532,7 +546,8 @@ const joinChurch = async (req, res) => {
     // Check if user already joined this church
     const alreadyJoined = user.churchesJoined.includes(churchId);
     const alreadyMember = church.churchMembers.some(
-      (member) => member.userId?.toString() === userId.toString()
+      // FIX: Use `_id` for the check as per the schema
+      (member) => member._id?.toString() === userId.toString()
     );
 
     if (alreadyJoined || alreadyMember) {
@@ -546,7 +561,8 @@ const joinChurch = async (req, res) => {
 
     // Update church in DB
     church.churchMembers.push({
-      userId: user._id,
+      // FIX: Use `_id` to match the schema
+      _id: user._id,
       name: `${user.firstName} ${user.lastName}`,
       email: user.email,
     });
@@ -557,7 +573,6 @@ const joinChurch = async (req, res) => {
     const newToken = signJwt({ user, role: user.role, name: user.firstName, churchId: user.churchId},);
         const refreshToken = signRefreshToken({_id: user._id, role: user.role, churchId: user.churchId });
 
-  
     res.status(200).json({
       message: 'Successfully joined the church',
       churchesJoined: user.churchesJoined,
