@@ -16,9 +16,9 @@ const dotenv = require("dotenv");
 dotenv.config();
 
 const transporter = nodemailer.createTransport({
-  host: "smtp.mailersend.net",
+  host: process.env.EMAIL_HOST,
   port: 587,
-  secure: false,
+  secure: false, // true if port 465
   auth: {
     user: process.env.EMAIL_USERNAME,
     pass: process.env.EMAIL_PASSWORD,
@@ -26,29 +26,28 @@ const transporter = nodemailer.createTransport({
 });
 
 
-
 // Generate Verification Token
 const generateVerificationToken = (userId) => {
-    return jwt.sign({ userId }, process.env.JWT_SECRET, { expiresIn: "1h" });
+  return jwt.sign({ userId }, process.env.JWT_SECRET, { expiresIn: "1h" });
 };
 
+
 // Send Verification Email
-const sendVerificationEmail = async (email, name, verificationCode) => {
-    try {
-        const expiresAt = new Date(Date.now() + 10 * 60 * 1000);
+const sendVerificationEmail = async (email, name, token) => {
+  const verificationLink = `${process.env.FRONTEND_URL}/verify-email/${token}`;
+  const mailOptions = {
+    from: process.env.EMAIL_USERNAME,
+    to: email,
+    subject: "Verify Your Account",
+    html: `
+      <p>Hi ${name},</p>
+      <p>Please click the link below to verify your email:</p>
+      <a href="${verificationLink}">Verify Email</a>
+      <p>This link expires in 1 hour.</p>
+    `,
+  };
 
-        const mailOptions = {
-            from: process.env.EMAIL_USERNAME,
-            to: email,
-            subject: "Verify Your Account",
-            text: `Hi ${name},\n\nYour verification code is: ${verificationCode}. It expires in 10 minutes.\n\nThank you!`,
-        };
-
-        await transporter.sendMail(mailOptions);
-        console.log(`Verification email sent to ${email}`);
-    } catch (error) {
-        console.error("Error sending verification email:", error);
-    }
+  await transporter.sendMail(mailOptions);
 };
 
 // Send Email
