@@ -16,12 +16,16 @@ const dotenv = require("dotenv");
 dotenv.config();
 
 const transporter = nodemailer.createTransport({
-    service: "gmail",
-    auth: {
-        user: process.env.EMAIL_USERNAME, 
-        pass: process.env.EMAIL_PASSWORD, 
-    },
+  host: "smtp.mailersend.net",
+  port: 587,
+  secure: false,
+  auth: {
+    user: process.env.EMAIL_USERNAME,
+    pass: process.env.EMAIL_PASSWORD,
+  },
 });
+
+
 
 // Generate Verification Token
 const generateVerificationToken = (userId) => {
@@ -71,7 +75,7 @@ const sendVerificationOnSignup = async (req, res, next) => {
         const user = await User.findOne({ email });
         const church = await Church.findOne({ churchEmail: email }); // Assuming you have a Church model
 
-        if (!user || !church) { 
+        if (!user && !church) { 
             return res.status(404).json({ message: "User not found" });
         }
 
@@ -79,7 +83,9 @@ const sendVerificationOnSignup = async (req, res, next) => {
             return res.status(400).json({ message: "Email already verified" });
         }
 
-        await sendVerificationEmail(user || church);
+       const target = user || church;
+await sendVerificationEmail(target.email, target.firstName || target.churchName, target.verificationCode);
+
         res.status(200).json({ message: "Verification email sent. Please check your inbox." });
     } catch (error) {
         res.status(500).json({ message: "Server error", error });
@@ -141,8 +147,10 @@ const resendVerificationEmail = async (req, res) => {
             return res.status(400).json({ message: "Email already verified" });
         }
 
-        await sendVerificationEmail(user || church);
-        res.status(200).json({ message: "Verification email resent" });
+if (user && !user.isVerified) await sendVerificationEmail(user.email, user.firstName, user.verificationCode);
+if (church && !church.isEmailVerified) await sendVerificationEmail(church.churchEmail, church.churchName, church.verificationCode);
+
+res.status(200).json({ message: "Verification email resent" });
     } catch (error) {
         res.status(500).json({ message: "Server error", error });
     }
