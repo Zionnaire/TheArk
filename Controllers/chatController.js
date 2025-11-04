@@ -1606,7 +1606,6 @@ const getOrCreateGeneralChat = async (req, res) => {
   }
 };
 
-
 const getMessages = async (req, res) => {
   const retryOperation = async (operation, retries = MAX_RETRIES) => {
     for (let attempt = 1; attempt <= retries; attempt++) {
@@ -1641,7 +1640,6 @@ const getMessages = async (req, res) => {
     );
 
     if (!mongoose.Types.ObjectId.isValid(chatId)) {
-      console.log(`[Backend] Invalid chatId format`, { chatId });
       return res.status(400).json({
         message: "Invalid chat ID format (must be a valid ObjectId).",
       });
@@ -1649,9 +1647,7 @@ const getMessages = async (req, res) => {
 
     const MAX_LIMIT = 50;
     const limit = Math.min(parseInt(queryLimit || "20", 10), MAX_LIMIT);
-
     if (isNaN(limit) || limit <= 0) {
-      console.log(`[Backend] Invalid limit provided`, { queryLimit });
       return res.status(400).json({ message: "Invalid limit provided." });
     }
 
@@ -1669,65 +1665,40 @@ const getMessages = async (req, res) => {
           .lean();
 
         if (!chat) {
-          console.log(`[Backend] Chat not found`, { chatId });
           await session.abortTransaction();
           return res.status(404).json({ message: "Chat not found." });
         }
 
-        // Validate church for general chats
         if (chat.chatType === "general" && (!chat.church || !chat.church._id)) {
-          console.error(`[Backend] General chat missing church reference`, { chatId });
           await session.abortTransaction();
           return res.status(500).json({ message: "General chat missing church reference." });
         }
 
-        const validParticipants = chat.participants.filter((p) =>
+        chat.participants = chat.participants.filter((p) =>
           mongoose.Types.ObjectId.isValid(p._id)
         );
-        if (validParticipants.length !== chat.participants.length) {
-          console.warn(`[Backend] Invalid participant IDs detected in chat`, {
-            chatId,
-            invalidParticipants: chat.participants.filter(
-              (p) => !mongoose.Types.ObjectId.isValid(p._id)
-            ),
-          });
-          chat.participants = validParticipants;
-        }
 
+        // Department chat validations
         if (chat.chatType === "department" && departmentId) {
           if (!mongoose.Types.ObjectId.isValid(departmentId)) {
-            console.log(`[Backend] Invalid departmentId`, { departmentId });
             await session.abortTransaction();
             return res.status(400).json({ message: "Invalid department ID" });
           }
 
           const department = await Department.findById(departmentId).session(session);
           if (!department) {
-            console.log(`[Backend] Department not found`, { departmentId });
             await session.abortTransaction();
             return res.status(404).json({ message: "Department not found." });
           }
 
-          if (
-            !department.members.some((memberId) => memberId.equals(currentUserId))
-          ) {
-            console.log(`[Backend] User not authorized for department chat`, {
-              departmentId,
-              userId: currentUserId.toString(),
-            });
+          if (!department.members.some((memberId) => memberId.equals(currentUserId))) {
             await session.abortTransaction();
             return res.status(403).json({
               message: "You must be a department member to view messages in this chat.",
             });
           }
 
-          if (
-            !chat.participants.some((p) => p._id.toString() === currentUserId.toString())
-          ) {
-            console.log(`[Backend] Adding user to department chat participants`, {
-              chatId,
-              userId: currentUserId.toString(),
-            });
+          if (!chat.participants.some((p) => p._id.toString() === currentUserId.toString())) {
             await Chat.updateOne(
               { _id: chatId },
               {
@@ -1761,48 +1732,35 @@ const getMessages = async (req, res) => {
               .session(session)
               .lean();
           }
-        } else if (chat.chatType === "unit") {
+        }
+
+        // Unit chat validations
+        if (chat.chatType === "unit") {
           if (!chat.unit) {
-            console.log(`[Backend] Unit reference missing in chat`, { chatId });
             await session.abortTransaction();
             return res.status(404).json({ message: "Unit reference missing in chat." });
           }
-
-          if (
-            !chat.unit.members.some((memberId) => memberId.equals(currentUserId)) &&
-            !chat.unit.unitHead.equals(currentUserId)
-          ) {
-            console.log(`[Backend] User not authorized for unit chat`, {
-              unitId: chat.unit._id,
-              userId: currentUserId.toString(),
-            });
+          if (!chat.unit.members.some((memberId) => memberId.equals(currentUserId)) &&
+              !chat.unit.unitHead.equals(currentUserId)) {
             await session.abortTransaction();
             return res.status(403).json({
               message: "You must be a unit member or head to view messages in this chat.",
             });
           }
-        } else if (chat.chatType === "private") {
+        }
+
+        // Private chat validations
+        if (chat.chatType === "private") {
           const isParticipant = chat.participants.some((p) => {
             try {
-              return (
-                mongoose.Types.ObjectId.isValid(p._id) &&
-                new mongoose.Types.ObjectId(p._id).equals(currentUserId)
-              );
-            } catch (err) {
-              console.warn(`[Backend] Invalid participant ID in private chat`, {
-                participant: p,
-                chatId,
-              });
+              return mongoose.Types.ObjectId.isValid(p._id) &&
+                     new mongoose.Types.ObjectId(p._id).equals(currentUserId);
+            } catch {
               return false;
             }
           });
 
           if (!isParticipant) {
-            console.log(`[Backend] User not authorized for private chat`, {
-              chatId,
-              userId: currentUserId.toString(),
-              participants: chat.participants.map((p) => p._id.toString()),
-            });
             await session.abortTransaction();
             return res.status(403).json({
               message: "You are not authorized to view messages in this chat.",
@@ -1810,6 +1768,7 @@ const getMessages = async (req, res) => {
           }
         }
 
+        // Mark messages read
         await Promise.all([
           Message.updateMany(
             {
@@ -1817,118 +1776,47 @@ const getMessages = async (req, res) => {
               sender: { $ne: currentUserId },
               "readBy.user": { $ne: currentUserId },
             },
-            {
-              $addToSet: {
-                readBy: {
-                  user: new mongoose.Types.ObjectId(currentUserId),
-                  readAt: new Date(),
-                },
-              },
-            },
+            { $addToSet: { readBy: { user: currentUserId, readAt: new Date() } } },
             { session }
           ),
           Chat.findOneAndUpdate(
-            {
-              _id: chatId,
-              "unreadCounts.user": new mongoose.Types.ObjectId(currentUserId),
-            },
+            { _id: chatId, "unreadCounts.user": currentUserId },
             { $set: { "unreadCounts.$.count": 0 } },
             { new: true, session }
           ),
         ]);
 
+        // Fetch messages
         let filter = { chat: chatId };
         if (beforeId && mongoose.Types.ObjectId.isValid(beforeId)) {
           filter._id = { $lt: new mongoose.Types.ObjectId(beforeId) };
-          console.log(`[Backend] Using _id filter: ${JSON.stringify(filter._id)}`);
-        } else if (beforeId) {
-          console.warn(`[Backend] Invalid beforeId received: ${beforeId}. Skipping _id filter.`);
-        } else {
-          console.log(`[Backend] No beforeId provided. Fetching latest messages.`);
         }
 
         const fetchedMessages = await Message.find(filter)
           .sort({ createdAt: -1 })
           .limit(limit + 1)
           .populate("sender", "userName firstName lastName userImage churchName churchLogo")
-          .populate({
-            path: "reactions.user",
-            select: "userName firstName lastName userImage churchName churchLogo",
-          })
-          .populate({
-            path: "replyTo",
-            select: "messageText sender",
-            populate: { path: "sender", select: "userName userImage churchName churchLogo" },
-          })
-          .populate({
-            path: "post",
-            populate: [
-              { path: "user", select: "userName firstName lastName userImage" },
-              { path: "church", select: "churchName churchLogo" },
-            ],
-          })
-          .populate({
-            path: "chat",
-            select: "church",
-            populate: { path: "church", select: "churchName churchLogo _id" },
-          })
-          .session(session)
+          .populate({ path: "reactions.user", select: "userName firstName lastName userImage churchName churchLogo" })
+          .populate({ path: "replyTo", select: "messageText sender", populate: { path: "sender", select: "userName userImage churchName churchLogo" } })
+          .populate({ path: "post", populate: [{ path: "user", select: "userName firstName lastName userImage" }, { path: "church", select: "churchName churchLogo" }] })
           .lean();
 
         const hasMore = fetchedMessages.length > limit;
 
+        // Safe message mapping
         const messagesToReturn = fetchedMessages
           .slice(0, limit)
           .reverse()
           .map((msg) => {
-            const isChurchMessage =
-              msg.sender?._id?.toString() === chat.church?._id?.toString() ||
-              !!msg.metadata?.announcementId;
-
-            console.log(`[Backend] Processing message`, {
-              messageId: msg._id,
-              senderId: msg.sender?._id?.toString() || msg.senderId,
-              isChurchMessage,
-              contentType: msg.contentType,
-              announcementId: msg.metadata?.announcementId,
-              chatChurch: chat.church,
-              msgChatChurch: msg.chat?.church,
-            });
+            const isChurchMessage = msg.sender?._id?.toString() === chat.church?._id?.toString() || !!msg.metadata?.announcementId;
 
             if (isChurchMessage) {
               return {
                 ...msg,
                 sender: {
-                  _id: chat.church._id,
-                  userName: chat.church.churchName || "Church Admin",
-                  firstName: chat.church.churchName || "Church",
-                  lastName: "",
-                  userImage: chat.church.churchLogo || [],
-                  churchName: chat.church.churchName,
-                  churchLogo: chat.church.churchLogo,
-                },
-                chat: {
-                  church: {
-                    _id: chat.church._id,
-                    churchName: chat.church.churchName,
-                    churchLogo: chat.church.churchLogo,
-                  },
-                },
-                senderId: chat.church._id.toString(),
-                isAnnouncement: !!msg.metadata?.announcementId,
-              };
-            }
-
-            if (
-              (msg.contentType === "system" || msg.metadata?.announcementId) &&
-              !msg.sender
-            ) {
-              return {
-                ...msg,
-                sender: {
-                  _id: "system",
-                  userName: chat.church?.churchName || "System",
-                  firstName: chat.church?.churchName || "System",
+                  _id: chat.church?._id || "church_unknown",
+                  userName: chat.church?.churchName || "Church Admin",
+                  firstName: chat.church?.churchName || "Church",
                   lastName: "",
                   userImage: chat.church?.churchLogo || [],
                   churchName: chat.church?.churchName,
@@ -1936,22 +1824,17 @@ const getMessages = async (req, res) => {
                 },
                 chat: {
                   church: {
-                    _id: chat.church._id,
-                    churchName: chat.church.churchName,
-                    churchLogo: chat.church.churchLogo,
+                    _id: chat.church?._id || "church_unknown",
+                    churchName: chat.church?.churchName || "Church",
+                    churchLogo: chat.church?.churchLogo || [],
                   },
                 },
-                senderId: "system",
+                senderId: chat.church?._id?.toString() || "church_unknown",
                 isAnnouncement: !!msg.metadata?.announcementId,
               };
             }
 
             if (!msg.sender || !msg.sender._id) {
-              console.warn(`[Backend] Missing sender or senderId for message`, {
-                messageId: msg._id,
-                senderId: msg.senderId,
-                chatId,
-              });
               return {
                 ...msg,
                 sender: {
@@ -1965,9 +1848,9 @@ const getMessages = async (req, res) => {
                 },
                 chat: {
                   church: {
-                    _id: chat.church._id,
-                    churchName: chat.church.churchName,
-                    churchLogo: chat.church.churchLogo,
+                    _id: chat.church?._id || "unknown",
+                    churchName: chat.church?.churchName || "Unknown Church",
+                    churchLogo: chat.church?.churchLogo || [],
                   },
                 },
                 senderId: msg.senderId || "unknown",
@@ -1984,9 +1867,9 @@ const getMessages = async (req, res) => {
               },
               chat: {
                 church: {
-                  _id: chat.church._id,
-                  churchName: chat.church.churchName,
-                  churchLogo: chat.church.churchLogo,
+                  _id: chat.church?._id || "unknown",
+                  churchName: chat.church?.churchName || "Unknown Church",
+                  churchLogo: chat.church?.churchLogo || [],
                 },
               },
               senderId: msg.sender._id.toString(),
@@ -1997,68 +1880,28 @@ const getMessages = async (req, res) => {
         const chatContext = {
           chatId: chat._id.toString(),
           type: chat.chatType,
-          name:
-            chat.name ||
-            (chat.department
-              ? chat.department.deptName
-              : chat.church
-              ? chat.church.churchName
-              : chat.chatType === "private"
-              ? chat.participants.find(
-                  (p) => p._id.toString() !== currentUserId.toString()
-                )?.userName
-              : "Unnamed Chat"),
+          name: chat.name || chat.department?.deptName || chat.church?.churchName || "Unnamed Chat",
           image:
-            chat.unit?.unitLogo?.map((img) => ({
-              url: img.url || img,
-              type: "image",
-            })) ||
-            chat.department?.deptLogo?.map((img) => ({
-              url: img.url || img,
-              type: "image",
-            })) ||
-            chat.church?.churchLogo?.map((img) => ({
-              url: img.url || img,
-              type: "image",
-            })) ||
-            (chat.image ? [{ url: chat.image, type: "image" }] : []),
+            chat.unit?.unitLogo?.map((img) => ({ url: img.url || img, type: "image" })) ||
+            chat.department?.deptLogo?.map((img) => ({ url: img.url || img, type: "image" })) ||
+            chat.church?.churchLogo?.map((img) => ({ url: img.url || img, type: "image" })) ||
+            [],
           departmentId: chat.department?._id?.toString(),
           unitId: chat.unit?._id?.toString(),
           churchId: chat.church?._id?.toString() || null,
           participants: chat.participants.map((p) => p._id.toString()),
-          model:
-            chat.chatType === "private"
-              ? "PrivateChat"
-              : chat.chatType === "unit"
-              ? "UnitChat"
-              : chat.chatType === "department"
-              ? "DepartmentChat"
-              : "GeneralChat",
-          church: chat.church
-            ? {
-                _id: chat.church._id.toString(),
-                churchName: chat.church.churchName || "Unnamed Church",
-                churchLogo: chat.church.churchLogo?.map((img) => ({
-                  url: img.url || img,
-                  type: "image",
-                })) || [],
-              }
-            : {
-                _id: "unknown",
-                churchName: "Unnamed Church",
-                churchLogo: [],
-              },
+          model: chat.chatType === "private" ? "PrivateChat" :
+                 chat.chatType === "unit" ? "UnitChat" :
+                 chat.chatType === "department" ? "DepartmentChat" :
+                 "GeneralChat",
+          church: {
+            _id: chat.church?._id?.toString() || "unknown",
+            churchName: chat.church?.churchName || "Unnamed Church",
+            churchLogo: chat.church?.churchLogo?.map((img) => ({ url: img.url || img, type: "image" })) || [],
+          },
         };
 
         await session.commitTransaction();
-
-        console.log(`[Backend] Messages fetched`, {
-          chatId,
-          messageCount: messagesToReturn.length,
-          hasMore,
-          chatContext,
-          sampleMessage: messagesToReturn[0], // Log first message for debugging
-        });
 
         return res.status(200).json({
           success: true,
@@ -2076,10 +1919,7 @@ const getMessages = async (req, res) => {
 
     return result;
   } catch (error) {
-    console.error("[Backend] Error retrieving messages:", {
-      message: error.message,
-      stack: error.stack,
-    });
+    console.error("[Backend] Error retrieving messages:", error);
     return res.status(500).json({
       success: false,
       message: "Internal server error retrieving messages.",
@@ -2087,6 +1927,7 @@ const getMessages = async (req, res) => {
     });
   }
 };
+
 
 
   const deleteMessage = async (req, res) => {
